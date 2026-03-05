@@ -1,0 +1,36 @@
+# Binaries
+seaturt-server/bin/
+seaturt-server/server
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.test
+*.out
+coverage.html
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Config (may contain secrets)
+# seaturt-server/config.yaml
+
+# Temp
+*.tmp
+*.log
