@@ -208,20 +208,19 @@ defer mockServer.Close()
 | IT-40 | `TestWorkspaceFiles_PortsMD` | 创建 Agent 后 `.seaturt/PORTS.md` 存在且包含正确端口映射 |
 | IT-41 | `TestSystemPrompt_Default` | 未指定 system_prompt 时使用默认内容 |
 | IT-42 | `TestSystemPrompt_Custom` | 指定 system_prompt 时追加到 SYSTEM.md |
-| IT-43 | `TestSystemPrompt_Desktop` | `desktop: true` 时 SYSTEM.md 包含桌面相关指令 |
+| IT-43 | `TestSystemPrompt_Desktop` | SYSTEM.md 包含桌面相关指令（统一镜像，所有 Agent 均含桌面） |
 | IT-44 | `TestSystemPrompt_UsedInLoop` | Chat 时 LLM 收到的 system message 来自 SYSTEM.md |
 | IT-45 | `TestSystemPrompt_HotReload` | 修改 SYSTEM.md → 下次 Chat 使用新内容 |
 | IT-46 | `TestSystemPrompt_Fallback` | 删除 SYSTEM.md → 使用 DefaultSystemPrompt |
 | IT-47 | `TestPortsMD_Regenerated` | Stop/Start 后 PORTS.md 重新生成 |
 | IT-48 | `TestPortsAPI` | `GET /api/agents/:id/ports` 返回正确映射 |
-| IT-29 | `TestDesktop_ContainerWithVNC` | 桌面容器启动 → VNC 端口可用 |
-| IT-30 | `TestDesktop_NoVNCWebAccess` | noVNC Web 端口 6080 映射 |
-| IT-31 | `TestDesktop_Screenshot` | 桌面模式自动添加 desktop MCP Server |
-| IT-36 | `TestDesktop_NonDesktopAgent` | 非桌面 Agent 不含 desktop MCP Server |
+| IT-29 | `TestDesktop_ContainerWithDesktop` | 容器启动 → Selkies WebRTC 桌面端口可用 |
+| IT-30 | `TestDesktop_WebRTCAccess` | Selkies Web 端口映射 |
+| IT-31 | `TestDesktop_Screenshot` | desktop MCP Server screenshot 工具 |
 | IT-37 | `TestDesktop_DynamicPorts` | 多 Agent 端口不冲突 |
 | IT-38 | `TestDesktop_DesktopAPI` | `GET /api/agents/:id/desktop` 返回正确信息 |
 
-> 桌面测试（IT-29/30/31/38/43）需要 `seaturt/sandbox-desktop:latest` 镜像。无镜像时自动 SKIP，通过 `createDesktopAgent()` 辅助函数优雅处理。
+> 统一镜像内置桌面环境，所有 Agent 均支持桌面功能，不再需要单独的桌面镜像。
 
 ### E2E 测试（已实现）
 

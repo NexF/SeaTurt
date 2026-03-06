@@ -27,11 +27,12 @@ api/router.go
    │     │   └── validate.go   — 输入验证
    │     │
    │     └── mcp/         (MCP 通信层)
-   │         ├── router.go     — tool_name → Client 路由
-   │         ├── pool.go       — 多 MCP Server 连接池
-   │         ├── client.go     — MCP JSON-RPC 客户端
-   │         ├── protocol.go   — 协议类型定义
-   │         └── transport.go  — Docker exec stdio 传输
+   │         ├── router.go              — tool_name → Executor 路由
+   │         ├── executor.go            — 单次 docker exec + MCP 调用
+   │         ├── ephemeral_transport.go  — Docker exec stdio 传输层（单次）
+   │         ├── registry.go            — 工具注册表（从 YAML 加载）
+   │         ├── builtin_tools.go       — 内置工具定义 + WriteBuiltinTools
+   │         └── protocol.go            — 协议类型定义
    │
    └── store/sqlite.go  (持久化: Agent + Message + 图片外部化)
 ```
@@ -46,8 +47,6 @@ type AgentConfig struct {
     MCPServers  []MCPServerConfig // MCP Server 列表
     ExtraMounts []string          // 额外挂载路径
     EnvVars     map[string]string // 自定义环境变量
-    Desktop     bool              // 是否桌面模式（v0.0.3）
-    Resolution  string            // 桌面分辨率（v0.0.3，默认 "1920x1080x24"）
     SystemPrompt string           // 用户自定义的额外 system prompt（v0.0.4）
 }
 ```
@@ -63,17 +62,14 @@ type Agent struct {
     Image         string      // 使用的镜像
     WorkspacePath string      // 宿主机 workspace 路径
     Config        AgentConfig // 运行配置
-    VNCPort       string      // 宿主机 VNC 端口（桌面模式，v0.0.3，运行时字段）— 已弃用
-    NoVNCPort     string      // 宿主机 noVNC 端口（桌面模式，v0.0.3，运行时字段）— 已弃用
-    NoVNCURL      string      // noVNC 访问 URL（桌面模式，v0.0.3，运行时字段）— 已弃用
-    KasmVNCPort   string      // 宿主机 KasmVNC HTTP 端口（桌面模式，运行时字段）
-    KasmVNCURL    string      // KasmVNC 访问 URL（桌面模式，运行时字段）
+    DesktopPort   string      // 宿主机 Selkies HTTP 端口（运行时字段）
+    DesktopURL    string      // Selkies 访问 URL（运行时字段）
     CreatedAt     time.Time
     UpdatedAt     time.Time
 }
 ```
 
-> KasmVNCPort/KasmVNCURL 是运行时字段，不持久化到 DB，每次启动后从 Docker 端口映射查询获取（容器端口 3000 → 宿主机随机端口）。
+> DesktopPort/DesktopURL 是运行时字段，不持久化到 DB，每次启动后从 Docker 端口映射查询获取（容器端口 3000 → 宿主机随机端口）。
 
 ### Status 流转
 
@@ -143,8 +139,7 @@ type Manager struct {
     store     Store              // SQLite 持久化
     docker    *container.Manager // Docker 容器管理
     llmClient *llm.Client        // LLM API 客户端
-    pools     map[string]*mcp.Pool   // agentID → MCP 连接池
-    routers   map[string]*mcp.Router // agentID → 工具路由器
+    routers   map[string]*mcp.Router // agentID → 工具路由器（含 Executor）
     mu        sync.RWMutex           // 并发保护
 }
 ```
@@ -153,34 +148,29 @@ type Manager struct {
 
 ```
 1. 生成 agentID（时间戳格式）
-2. 确定 MCP Servers（用户指定 / 配置默认值）
-   ├── 桌面模式：自动追加 desktop MCP Server（v0.0.3）
-   └── 普通模式：使用用户指定或默认 MCP Servers
+2. 确定 MCP Servers（用户指定 / 配置默认值，默认包含 core + desktop）
 3. 确定 LLM model（用户指定 / 配置默认值）
-4. 选择镜像（v0.0.3）
-   ├── desktop=true  → config.desktop.sandbox_image（默认 seaturt/sandbox-desktop:latest，基于 linuxserver/webtop:ubuntu-kde）
-   └── desktop=false → config.sandbox_image（默认 seaturt/sandbox:latest）
-5. 创建 workspace 目录：~/.seaturt/workspaces/<agentID>/
-6. 创建 .seaturt/ 子目录
+4. 创建 workspace 目录：~/.seaturt/workspaces/<agentID>/
+5. 创建 .seaturt/ 子目录
+6. WriteBuiltinTools → workspace/.seaturt/tools/*.yaml（MCP 工具定义）
 7. 生成 SYSTEM.md → workspace/.seaturt/SYSTEM.md
    ├── 静态部分：身份、行为准则、工作目录、端口说明
-   ├── 动态部分：桌面指令（desktop=true 时）、MCP Server 列表
+   ├── 动态部分：桌面指令、MCP Server 列表
    └── 可选：用户自定义附加指令（system_prompt 字段）
 8. docker.CreateContainer
-   ├── 镜像：根据 desktop 标志自动选择
-   ├── 环境变量：HOST_UID, HOST_GID, 用户自定义 EnvVars
-   │   └── 桌面模式使用 PUID/PGID（LinuxServer 用户权限映射）+ TZ（时区）
+   ├── 镜像：seaturt/sandbox:latest（统一镜像）
+   ├── 环境变量：PUID, PGID, TZ, 用户自定义 EnvVars
    ├── 挂载：workspacePath → /workspace（+ ExtraMounts）
    ├── 端口映射：20 个常用端口统一预映射到 127.0.0.1 随机端口
-   ├── ShmSize：桌面模式 2GB，普通模式默认
+   ├── ShmSize：2GB
    ├── Label：seaturt.agent_id, seaturt.managed
    └── 容器名：seaturt-<agentID>
 9. docker.StartContainer
-10. 查询实际端口映射（ContainerInspect）
-    └── 桌面模式：填充 KasmVNCPort/KasmVNCURL（端口 3000）
-11. 生成 PORTS.md → workspace/.seaturt/PORTS.md
-12. mcp.Pool.Connect — 为每个 MCP Server 创建 docker exec 会话
-13. mcp.NewRouter — 建立 tool_name → MCP Client 路由表
+10. copyMCPBinaries — 从容器 staging 目录复制 bin 到 workspace tools/
+11. 查询实际端口映射（ContainerInspect）
+    └── 填充 DesktopPort/DesktopURL（Selkies 端口 3000）
+12. 生成 PORTS.md → workspace/.seaturt/PORTS.md
+13. ToolRegistry.LoadFromDir + NewExecutor + NewRouter
 14. store.CreateAgent — 持久化到 SQLite
 ```
 
@@ -190,25 +180,23 @@ type Manager struct {
 1. 从 DB 读取 Agent
 2. docker.StartContainer
 3. 查询端口映射，重新生成 PORTS.md（以防端口变化）
-4. mcp.Pool.Connect（重建所有 MCP 连接）
-5. mcp.NewRouter（重建路由表）
-6. 更新内存状态（pools, routers）
-7. store.UpdateAgentStatus → running
+4. ToolRegistry.LoadFromDir + NewExecutor + NewRouter
+5. 更新内存状态（routers）
+6. store.UpdateAgentStatus → running
 ```
 
 ### Stop（停止 Agent）
 
 ```
-1. pool.CloseAll（关闭 MCP 连接）
-2. 清理内存（delete pools/routers）
-3. docker.StopContainer
-4. store.UpdateAgentStatus → stopped
+1. 清理内存（delete routers）
+2. docker.StopContainer
+3. store.UpdateAgentStatus → stopped
 ```
 
 ### Delete（删除 Agent）
 
 ```
-1. pool.CloseAll
+1. 清理内存
 2. docker.RemoveContainer（force）
 3. store.DeleteMessages
 4. store.DeleteAgent
@@ -295,66 +283,65 @@ Agent Loop 通过 `StreamFunc` 回调实时推送事件到客户端：
 
 ## MCP 通信
 
-### 连接建立
+### Executor 模式（v0.1.3+）
 
-每个 Agent 对应一个 `mcp.Pool`（连接池），Pool 中每个 MCP Server 各有一个 `mcp.Client`。
+v0.1.3 起，MCP 通信采用 **Executor（无状态短命进程）模式**：每次 tool call 启动一个新的 `docker exec` 进程，完成后进程退出。
 
 ```
 Agent 容器
-├── mcp-server-core    ← Client 1 (docker exec stdio)
-├── mcp-server-browser ← Client 2 (docker exec stdio)
-└── mcp-server-desktop ← Client 3 (docker exec stdio, v0.0.3)
+├── mcp-server-core    ← Executor 按需启动 (docker exec stdio)
+└── mcp-server-desktop ← Executor 按需启动 (docker exec stdio)
 ```
+
+> 历史：v0.0.1 ~ v0.1.2 使用 Pool + Client 长连接模式（`mcp.Pool` → `mcp.Client` → `mcp.Transport`），
+> v0.1.3 重构为 Executor 模式，删除了 client.go、pool.go、transport.go。
 
 ### 通信链路
 
 ```
-Manager.Create
+Agent Loop → Router.Route("core-shell_exec")
    │
    ▼
-Pool.Connect(serverConfigs)
-   │  对每个 MCP Server:
+Router.SplitToolName("core-shell_exec") → server="core", tool="shell_exec"
    │
    ▼
-container.ExecStdio("mcp-server-core")
-   │  返回 HijackedResponse (stdin/stdout 双向流)
+Executor.Execute(ctx, "mcp-server-core", "shell_exec", args)
    │
-   ▼
-Transport(hijackedConn)
-   │  JSON-RPC 2.0 读写
+   ├── 1. docker exec <container> /workspace/.seaturt/tools/mcp-server-core
+   │      → HijackedResponse (stdin/stdout 双向流)
    │
-   ▼
-Client.Initialize()
-   │  MCP 握手 → 获取 server capabilities
+   ├── 2. ephemeralTransport.Initialize()
+   │      → MCP JSON-RPC 握手
    │
-   ▼
-Client.ListTools()
-   │  获取工具定义列表 → 缓存
+   ├── 3. ephemeralTransport.CallTool("shell_exec", args)
+   │      → JSON-RPC tools/call
    │
-   ▼
-Router.Rebuild(pool)
-   │  tool_name → Client 映射表
+   ├── 4. normalizeResult(result)
+   │      → 标准化响应格式
    │
-   ▼
-就绪，等待 Loop 调用
+   └── 5. Close() → stdin EOF → MCP Server 进程退出
 ```
 
 ### 工具路由
 
-`mcp.Router` 维护 `tool_name → *Client` 映射：
+`mcp.Router` 维护 `ToolRegistry`（从 YAML 加载）+ `Executor`，通过 qualified name 路由：
 
 ```
 用户说 "列出当前目录文件"
    │
-   ▼ LLM 决定调用 shell_exec
-Agent Loop → Router.Route("shell_exec")
+   ▼ LLM 决定调用 core-shell_exec
+Agent Loop → Router.Route("core-shell_exec")
    │
-   ▼ 路由到 mcp-server-core 的 Client
-Client.CallTool("shell_exec", {command: "ls -la"})
+   ▼ SplitToolName → server="core", tool="shell_exec"
+   │  Registry 查找 command="mcp-server-core"
    │
-   ▼ docker exec stdio → 容器内 MCP Server 执行
+   ▼ Executor.Execute("mcp-server-core", "shell_exec", args)
+   │  docker exec stdio → 容器内 MCP Server 执行
+   │
 返回结果 → formatToolResult → 回传 LLM
 ```
+
+工具名称格式为 `{server}-{tool}`（如 `core-shell_exec`、`desktop-screenshot`），由 `ToolRegistry.AllTools()` 自动添加前缀。
 
 ## LLM 调用层
 
@@ -533,11 +520,12 @@ data: {}
 | `internal/llm/provider.go` | 207 | OpenAI/Anthropic 格式化器 |
 | `internal/llm/tools.go` | 34 | MCP → OpenAI 工具定义转换 |
 | `internal/llm/validate.go` | 35 | 输入类型验证 |
-| `internal/mcp/client.go` | 181 | MCP JSON-RPC 客户端 |
-| `internal/mcp/pool.go` | 101 | 多 MCP Server 连接池 |
-| `internal/mcp/router.go` | 99 | 工具名称路由 |
-| `internal/mcp/protocol.go` | 121 | MCP 协议类型定义 |
-| `internal/mcp/transport.go` | 148 | Docker exec stdio 传输层 |
+| `internal/mcp/executor.go` | ~105 | MCP Executor：docker exec + 握手 + 调用 + 关闭 |
+| `internal/mcp/ephemeral_transport.go` | ~160 | 单次 MCP JSON-RPC 传输层 |
+| `internal/mcp/registry.go` | ~205 | 工具注册表（从 YAML 加载） |
+| `internal/mcp/builtin_tools.go` | ~310 | 内置工具定义 + WriteBuiltinTools |
+| `internal/mcp/router.go` | ~76 | qualified name 路由 → Executor 调用 |
+| `internal/mcp/protocol.go` | ~121 | MCP 协议类型定义 |
 | `internal/store/sqlite.go` | 337 | SQLite CRUD + 图片外部化 |
 | `internal/config/config.go` | 266 | 多 Provider 配置加载 |
 

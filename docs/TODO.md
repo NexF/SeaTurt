@@ -15,14 +15,14 @@
 
 | 改动 | 说明 |
 |------|------|
-| Pool 动态管理 | `Pool.ConnectOne()` / `Pool.DisconnectOne()` — 支持单个 MCP 的热插拔 |
+| Executor 动态管理 | `Registry.Register()` / `Registry.Unregister()` — 支持单个 MCP 的热插拔 |
 | 文件系统 watcher | 监听 `.seaturt/skills/` 目录变化，自动发现新 MCP Server |
 | Config schema | MCP Server 支持声明 config schema，前端据此渲染配置表单 |
 | 技能管理 API | `GET /api/agents/:id/skills` — 列出技能（含状态、config）|
 |  | `PUT /api/agents/:id/skills/:name` — 启用/禁用、更新 config |
 |  | `POST /api/agents/:id/skills/:name/reload` — 重新加载单个技能 |
 | MCPServerConfig 扩展 | 增加 `enabled`、`config`、`source`（builtin/discovered）等字段 |
-| Router 热更新 | 技能启用/禁用后重建路由表 |
+| Router 热更新 | 技能启用/禁用后重建 ToolRegistry 路由表 |
 
 ### 前端改动（预估）
 
@@ -67,5 +67,5 @@
 
 ### 待定问题
 
-- [ ] 是否需要同时支持有头模式（配合 noVNC 让用户看到浏览器操作过程）？
+- [ ] 是否需要同时支持有头模式（配合 Selkies WebRTC 让用户看到浏览器操作过程）？
 - [ ] 和桌面 Agent 的浏览器是否复用同一个实例？

@@ -8,7 +8,7 @@
 - **MCP 协议** — 通过 `docker exec` stdio 与容器内 MCP Server 通信
 - **内置工具** — shell 执行、文件读写（`mcp-server-core`）+ 桌面操作（`mcp-server-desktop`）
 - **多模态输入** — 支持文字 + 图片（JSON base64 / multipart 上传），自动适配 OpenAI / Anthropic 格式
-- **桌面环境** — 内置 KDE Plasma + KasmVNC，Agent 可截屏、模拟鼠标键盘操作
+- **桌面环境** — 内置 KDE Plasma + Selkies WebRTC，Agent 可截屏、模拟鼠标键盘操作
 - **流式对话** — SSE 实时推送 Agent 执行过程和结果
 - **Workspace 挂载** — 宿主机与容器共享文件目录
 - **统一端口映射** — 18 个常用端口自动映射（SSH/HTTP/VNC/Vite/DB 等）
@@ -139,7 +139,7 @@ curl -N -X POST http://localhost:8080/api/agents/<agent-id>/chat \
 curl -N -X POST http://localhost:8080/api/agents/<agent-id>/chat \
   -F "text=描述这张图片" -F "image=@photo.jpg"
 
-# 查询桌面 KasmVNC 访问信息
+# 查询桌面 Selkies 访问信息
 curl http://localhost:8080/api/agents/<agent-id>/desktop
 
 # 获取端口映射

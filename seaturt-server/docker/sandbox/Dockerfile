@@ -9,7 +9,7 @@ WORKDIR /build/desktop
 COPY mcp-servers/desktop/ ./
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /mcp-server-desktop .
 
-# ===== Stage 2: Unified image based on LinuxServer Webtop (KDE + KasmVNC) =====
+# ===== Stage 2: Unified image based on LinuxServer Webtop (KDE + Selkies) =====
 FROM lscr.io/linuxserver/webtop:ubuntu-kde
 
 # Basic dev tools

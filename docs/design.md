@@ -148,16 +148,16 @@
 | 区块 | 内容 |
 |------|------|
 | 📁 文件树 | workspace 目录结构，点击可预览文档、表格、图片等文件 |
-| 🖥 桌面 | KasmVNC 实时桌面预览（iframe view-only 模式），点击跳转新标签页打开完整 KasmVNC 桌面 |
+| 🖥 桌面 | Selkies WebRTC 实时桌面预览（iframe view-only 模式），点击跳转新标签页打开完整桌面 |
 
 **桌面实时预览设计（v0.1.1 更新）：**
-- 使用 `<iframe>` 加载 KasmVNC URL（追加 `?view_only=true` 参数），实时视频流
+- 使用 `<iframe>` 加载 Selkies WebRTC URL，实时视频流
 - iframe 本身设为 1920×1080，通过 CSS `transform: scale()` 缩放到面板宽度
 - 外层容器 `overflow: hidden` 裁剪，实际显示约 280×158px（16:9 比例）
 - iframe 上覆盖一层透明遮罩（`pointer-events: none`），禁止在缩略图上直接操作
-- 点击遮罩 → `window.open(kasmVncUrl, '_blank')` 打开完整桌面（完整桌面无 view-only 限制）
-- **多连接共存**：KasmVNC 配置允许并发连接，预览 iframe 和新标签页完整桌面互不影响
-- **分辨率固定 1080p**：KasmVNC 配置 `allow_resize: false` + `1920x1080`，预览和完整桌面分辨率一致
+- 点击遮罩 → `window.open(desktopUrl, '_blank')` 打开完整桌面
+- **多连接共存**：Selkies 支持并发连接，预览 iframe 和新标签页完整桌面互不影响
+- **分辨率固定 1080p**：Selkies 启动参数 `--manual-width=1920 --manual-height=1080`，预览和完整桌面分辨率一致
 - Agent 未运行时显示灰色占位图 + "Agent 未运行"提示
 
 ---
@@ -183,7 +183,7 @@
 |------|------|------|------|
 | 名称 | 文本输入 | 是 | 允许任意字符，作为 Agent 展示名称；后端自动生成唯一 `agent_id`（用户不可见） |
 | 模型 | 下拉选择 | 是 | 下拉列表显示模型名称（如 GPT-4o），内部传递 `model_id`，可选项从后端配置获取 |
-| 启用桌面环境 | 开关 | 否 | 开启后容器会启动 Xvfb + noVNC |
+| ~~启用桌面环境~~ | ~~开关~~ | — | 已移除：所有 Agent 统一使用内置桌面环境（Selkies WebRTC） |
 
 **交互流程：**
 1. 点击"+ 新建 Agent"按钮

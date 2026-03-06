@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -8,6 +10,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
+)
+
+const (
+	// defaultShellTimeout is the default timeout for shell commands (120 seconds).
+	defaultShellTimeout = 120 * time.Second
+
+	// maxShellTimeout is the maximum allowed timeout (30 minutes).
+	maxShellTimeout = 30 * time.Minute
 )
 
 func toolShellExec(args map[string]any) CallToolResult {
@@ -16,13 +28,54 @@ func toolShellExec(args map[string]any) CallToolResult {
 		return errorResult("missing or invalid 'command' argument")
 	}
 
-	cmd := exec.Command("sh", "-c", command)
-	cmd.Dir = "/workspace"
-	output, err := cmd.CombinedOutput()
+	// Check if background mode is requested
+	if bg, ok := args["background"].(bool); ok && bg {
+		return shellExecBackground(command)
+	}
 
-	text := string(output)
+	// Parse optional timeout (seconds)
+	timeout := defaultShellTimeout
+	if t, ok := args["timeout"].(float64); ok && t > 0 {
+		timeout = time.Duration(t) * time.Second
+		if timeout > maxShellTimeout {
+			timeout = maxShellTimeout
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = "/workspace"
+	// Use a new process group so we can kill the entire tree on timeout
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	// Combine output
+	var text string
+	if stderr.Len() > 0 {
+		text = stdout.String() + stderr.String()
+	} else {
+		text = stdout.String()
+	}
+
 	if err != nil {
-		text += fmt.Sprintf("\nexit error: %v", err)
+		if ctx.Err() == context.DeadlineExceeded {
+			// Kill the process group to clean up any children
+			if cmd.Process != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+			text += fmt.Sprintf("\n\n[TIMEOUT] Command exceeded %v timeout and was killed. "+
+				"Use background=true for long-running processes like servers or browsers.",
+				timeout)
+		} else {
+			text += fmt.Sprintf("\nexit error: %v", err)
+		}
 		return CallToolResult{
 			Content: []ToolContent{{Type: "text", Text: text}},
 			IsError: true,
@@ -31,6 +84,33 @@ func toolShellExec(args map[string]any) CallToolResult {
 
 	return CallToolResult{
 		Content: []ToolContent{{Type: "text", Text: text}},
+	}
+}
+
+// shellExecBackground starts a command in the background using nohup + setsid,
+// returning immediately with the PID. Output is redirected to /tmp/bg_<pid>.log.
+func shellExecBackground(command string) CallToolResult {
+	// Use setsid to fully detach; redirect output to a log file
+	// The wrapper script: setsid sh -c '<command>' > /tmp/bg_$$.log 2>&1 &
+	wrapper := fmt.Sprintf(
+		`nohup setsid sh -c '%s' > /tmp/bg_cmd.log 2>&1 & echo $!`,
+		strings.ReplaceAll(command, "'", "'\"'\"'"),
+	)
+
+	cmd := exec.Command("sh", "-c", wrapper)
+	cmd.Dir = "/workspace"
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to start background process: %v\n%s", err, string(output)))
+	}
+
+	pid := strings.TrimSpace(string(output))
+	return CallToolResult{
+		Content: []ToolContent{{Type: "text", Text: fmt.Sprintf(
+			"Process started in background (PID: %s)\nOutput log: /tmp/bg_cmd.log\n"+
+				"Use `cat /tmp/bg_cmd.log` to check output, or `kill %s` to stop.",
+			pid, pid,
+		)}},
 	}
 }
 

@@ -18,7 +18,7 @@ DELETE /api/agents/:id              # 删除 Agent
 GET    /api/agents/:id/ports        # 查询端口映射表（v0.0.4）
 GET    /api/agents/:id/system-prompt   # 获取当前 SYSTEM.md 内容（v0.0.4）
 PUT    /api/agents/:id/system-prompt   # 更新 SYSTEM.md（v0.0.4）
-GET    /api/agents/:id/desktop      # 查询桌面状态和 VNC 访问信息（v0.0.3）
+GET    /api/agents/:id/desktop      # 查询桌面状态和访问信息（v0.0.3）
 ```
 
 ## 对话交互
@@ -133,19 +133,18 @@ curl -X POST http://localhost:8080/api/agents \
     "model": "gpt-4o"
   }'
 
-# 启用桌面模式
+# 指定模型
 curl -X POST http://localhost:8080/api/agents \
   -H "Content-Type: application/json" \
   -d '{
     "name": "全栈助手",
-    "model": "auto",
-    "desktop": true
+    "model": "auto"
   }'
 ```
 
 > 名称允许任意字符（中文、英文、符号均可），仅作展示用途，后端自动生成唯一 `agent_id`。
 > MCP Servers 默认挂载所有配置中的 `default_mcp_servers`，无需手动指定。
-> 桌面模式 Agent 使用 `seaturt/sandbox-desktop:latest` 镜像，自动添加 `mcp-server-desktop`，ShmSize 设为 2GB。
+> 所有 Agent 使用统一镜像 `seaturt/sandbox:latest`，内置桌面环境 + MCP Server。
 
 ### 对话
 
@@ -235,27 +234,19 @@ curl http://localhost:8080/api/agents
 ### 桌面状态查询（v0.0.3）
 
 ```bash
-# 查询桌面 Agent 的远程桌面访问信息
+# 查询 Agent 的远程桌面访问信息
 curl http://localhost:8080/api/agents/agent_abc123/desktop
 ```
 
-响应（桌面 Agent 运行中）：
+响应（Agent 运行中）：
 
 ```json
 {
-  "desktop_enabled": true,
-  "kasmvnc_port": "32770",
-  "kasmvnc_url": "http://localhost:32770",
-  "resolution": "auto",
+  "desktop_port": "32770",
+  "desktop_url": "http://localhost:32770",
+  "resolution": "1920x1080",
   "status": "running"
 }
 ```
 
-响应（非桌面 Agent）：
-
-```json
-{
-  "desktop_enabled": false,
-  "status": "running"
-}
-```
+> 所有 Agent 均内置 KDE Plasma 桌面环境（通过 Selkies WebRTC 访问），无需额外配置。

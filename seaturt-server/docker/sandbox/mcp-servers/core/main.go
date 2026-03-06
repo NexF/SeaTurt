@@ -122,13 +122,21 @@ func handleToolsList(req Request) {
 		Tools: []ToolDefinition{
 			{
 				Name:        "shell_exec",
-				Description: "Execute a shell command and return stdout/stderr",
+				Description: "Execute a shell command and return stdout/stderr. Default timeout is 120s. Use background=true for long-running processes (servers, browsers, etc.) — returns immediately with PID.",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"command": map[string]any{
 							"type":        "string",
 							"description": "The shell command to execute",
+						},
+						"timeout": map[string]any{
+							"type":        "number",
+							"description": "Timeout in seconds (default: 120, max: 1800). Command is killed if exceeded.",
+						},
+						"background": map[string]any{
+							"type":        "boolean",
+							"description": "If true, start the command in background and return immediately with PID. Use for long-running processes like servers, browsers, etc.",
 						},
 					},
 					"required": []string{"command"},
