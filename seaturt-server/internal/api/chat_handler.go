@@ -130,7 +130,7 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 		SystemPrompt: h.mgr.LoadSystemPrompt(ag),
 	}
 
-	finalContent, _, loopErr := agent.RunLoop(loopCfg, history, func(event agent.StreamEvent) {
+	finalContent, loopMessages, loopErr := agent.RunLoop(loopCfg, history, func(event agent.StreamEvent) {
 		data, err := json.Marshal(event)
 		if err != nil {
 			return
@@ -149,19 +149,41 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 		flusher.Flush()
 	}
 
-	// Save assistant message
-	if finalContent != "" {
-		assistantMsg := &agent.Message{
+	// Save new messages produced by the loop.
+	// loopMessages = [system(injected)] + history + new messages.
+	// Skip system messages and the original history (len(history) non-system msgs).
+	historyLen := len(history)
+	skipped := 0
+	for _, lm := range loopMessages {
+		if lm.Role == "system" {
+			continue
+		}
+		if skipped < historyLen {
+			skipped++
+			continue
+		}
+		msg := &agent.Message{
 			ID:        fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 			AgentID:   id,
-			Role:      "assistant",
-			Content:   llm.Content{llm.NewTextContent(finalContent)},
+			Role:      lm.Role,
+			Content:   lm.Content,
 			CreatedAt: time.Now(),
 		}
-		if err := store.CreateMessage(assistantMsg); err != nil {
-			slog.Error("failed to save assistant message", "err", err)
+		// Serialize tool_calls if present
+		if len(lm.ToolCalls) > 0 {
+			if tcJSON, err := json.Marshal(lm.ToolCalls); err == nil {
+				msg.ToolCalls = string(tcJSON)
+			}
+		}
+		// Restore tool_call_id for tool messages
+		if lm.ToolCallID != "" {
+			msg.ToolCallID = lm.ToolCallID
+		}
+		if err := store.CreateMessage(msg); err != nil {
+			slog.Error("failed to save loop message", "role", lm.Role, "err", err)
 		}
 	}
+	_ = finalContent
 }
 
 // parseContent extracts content blocks from the request.
@@ -291,8 +313,9 @@ func convertToLLMMessages(msgs []*agent.Message) []llm.ChatMessage {
 	result := make([]llm.ChatMessage, 0, len(msgs))
 	for _, m := range msgs {
 		cm := llm.ChatMessage{
-			Role:    m.Role,
-			Content: m.Content,
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCallID: m.ToolCallID,
 		}
 		// Restore tool_calls if present
 		if m.ToolCalls != "" {

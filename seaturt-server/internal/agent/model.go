@@ -42,10 +42,11 @@ type Agent struct {
 }
 
 type Message struct {
-	ID        string      `json:"id"`
-	AgentID   string      `json:"agent_id"`
-	Role      string      `json:"role"` // user | assistant | tool
-	Content   llm.Content `json:"content"`
-	ToolCalls string      `json:"tool_calls,omitempty"` // JSON string of tool calls
-	CreatedAt time.Time   `json:"created_at"`
+	ID         string      `json:"id"`
+	AgentID    string      `json:"agent_id"`
+	Role       string      `json:"role"` // user | assistant | tool
+	Content    llm.Content `json:"content"`
+	ToolCalls  string      `json:"tool_calls,omitempty"`   // JSON string of []ToolCall
+	ToolCallID string      `json:"tool_call_id,omitempty"` // For tool messages: which tool_call this responds to
+	CreatedAt  time.Time   `json:"created_at"`
 }

@@ -55,12 +55,13 @@ func (s *Store) migrate() error {
 			updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS messages (
-			id         TEXT PRIMARY KEY,
-			agent_id   TEXT NOT NULL,
-			role       TEXT NOT NULL,
-			content    TEXT NOT NULL DEFAULT '',
-			tool_calls TEXT NOT NULL DEFAULT '',
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			id           TEXT PRIMARY KEY,
+			agent_id     TEXT NOT NULL,
+			role         TEXT NOT NULL,
+			content      TEXT NOT NULL DEFAULT '',
+			tool_calls   TEXT NOT NULL DEFAULT '',
+			tool_call_id TEXT NOT NULL DEFAULT '',
+			created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_agent_id ON messages(agent_id, created_at)`,
@@ -71,6 +72,11 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("exec %q: %w", q[:40], err)
 		}
 	}
+
+	// Safe column migration: add tool_call_id if it doesn't exist yet.
+	// ALTER TABLE ... ADD COLUMN fails if the column already exists; just ignore.
+	_, _ = s.db.Exec(`ALTER TABLE messages ADD COLUMN tool_call_id TEXT NOT NULL DEFAULT ''`)
+
 	return nil
 }
 
@@ -156,16 +162,16 @@ func (s *Store) CreateMessage(m *agent.Message) error {
 	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO messages (id, agent_id, role, content, tool_calls, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		m.ID, m.AgentID, m.Role, string(contentJSON), m.ToolCalls, m.CreatedAt,
+		`INSERT INTO messages (id, agent_id, role, content, tool_calls, tool_call_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.AgentID, m.Role, string(contentJSON), m.ToolCalls, m.ToolCallID, m.CreatedAt,
 	)
 	return err
 }
 
 func (s *Store) ListMessages(agentID string) ([]*agent.Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, agent_id, role, content, tool_calls, created_at
+		`SELECT id, agent_id, role, content, tool_calls, tool_call_id, created_at
 		 FROM messages WHERE agent_id = ? ORDER BY created_at ASC`, agentID,
 	)
 	if err != nil {
@@ -177,7 +183,7 @@ func (s *Store) ListMessages(agentID string) ([]*agent.Message, error) {
 	for rows.Next() {
 		m := &agent.Message{}
 		var contentJSON string
-		if err := rows.Scan(&m.ID, &m.AgentID, &m.Role, &contentJSON, &m.ToolCalls, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.AgentID, &m.Role, &contentJSON, &m.ToolCalls, &m.ToolCallID, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		// Deserialize Content from JSON

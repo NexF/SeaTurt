@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import { ChatMessage, UIToolCall, ContentBlock, Message } from "@/types"
+import { ChatMessage, ChatSegment, UIToolCall, ContentBlock, Message } from "@/types"
 import * as api from "@/services/api"
 
 interface ChatStore {
@@ -14,33 +14,121 @@ interface ChatStore {
   reset: () => void
 }
 
-function convertHistoryMessage(msg: Message): ChatMessage | null {
-  if (msg.role === "tool") return null
+// Convert a sequence of history Messages into ChatMessages with proper segments.
+// The backend stores: user, assistant (with tool_calls), tool, ..., assistant (final).
+// We merge consecutive assistant+tool sequences into a single ChatMessage bubble
+// to match the streaming behavior.
+function convertHistoryMessages(msgs: Message[]): ChatMessage[] {
+  const result: ChatMessage[] = []
+  let currentAssistant: ChatMessage | null = null
 
-  let text = ""
-  let images: { data: string; mime_type: string }[] = []
-
-  if (typeof msg.content === "string") {
-    // Backend returns content as plain string
-    text = msg.content
-  } else if (Array.isArray(msg.content)) {
-    // Backend returns content as ContentBlock[]
-    const textBlocks = msg.content.filter((b) => b.type === "text")
-    const imageBlocks = msg.content.filter((b) => b.type === "image")
-    text = textBlocks.map((b) => b.text || "").join("")
-    images = imageBlocks
-      .filter((b) => b.image)
-      .map((b) => ({ data: b.image!.data, mime_type: b.image!.mime_type }))
+  const flushAssistant = () => {
+    if (currentAssistant) {
+      result.push(currentAssistant)
+      currentAssistant = null
+    }
   }
 
-  return {
-    id: msg.id,
-    role: msg.role as "user" | "assistant",
-    content: text,
-    images,
-    toolCalls: [],
-    isStreaming: false,
+  const ensureAssistant = (msg: Message): ChatMessage => {
+    if (!currentAssistant) {
+      currentAssistant = {
+        id: msg.id,
+        role: "assistant",
+        content: "",
+        toolCalls: [],
+        segments: [],
+        isStreaming: false,
+      }
+    }
+    return currentAssistant
   }
+
+  for (const msg of msgs) {
+    if (msg.role === "user") {
+      flushAssistant()
+
+      let text = ""
+      let images: { data: string; mime_type: string }[] = []
+      if (typeof msg.content === "string") {
+        text = msg.content
+      } else if (Array.isArray(msg.content)) {
+        const textBlocks = msg.content.filter((b) => b.type === "text")
+        const imageBlocks = msg.content.filter((b) => b.type === "image")
+        text = textBlocks.map((b) => b.text || "").join("")
+        images = imageBlocks
+          .filter((b) => b.image)
+          .map((b) => ({ data: b.image!.data, mime_type: b.image!.mime_type }))
+      }
+      result.push({
+        id: msg.id,
+        role: "user",
+        content: text,
+        images,
+        toolCalls: [],
+        segments: [],
+        isStreaming: false,
+      })
+    } else if (msg.role === "assistant") {
+      // Merge into current assistant bubble (don't flush — keeps multi-iteration in one bubble)
+      const assistant = ensureAssistant(msg)
+
+      let text = ""
+      if (typeof msg.content === "string") {
+        text = msg.content
+      } else if (Array.isArray(msg.content)) {
+        text = msg.content
+          .filter((b) => b.type === "text")
+          .map((b) => b.text || "")
+          .join("")
+      }
+
+      if (text) {
+        assistant.content += (assistant.content ? "\n\n" : "") + text
+        assistant.segments!.push({ type: "text", text })
+      }
+
+      // If this assistant message has tool_calls, add them to segments
+      if (msg.tool_calls) {
+        try {
+          const tcs = JSON.parse(msg.tool_calls) as Array<{
+            id: string
+            type: string
+            function: { name: string; arguments: string }
+          }>
+          for (const tc of tcs) {
+            const uiTc: UIToolCall = {
+              id: tc.id,
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+              isComplete: false,
+            }
+            assistant.toolCalls!.push(uiTc)
+            assistant.segments!.push({ type: "tool_call", toolCall: uiTc })
+          }
+        } catch {}
+      }
+    } else if (msg.role === "tool") {
+      // Match this tool result to the current assistant's toolCalls
+      if (currentAssistant && currentAssistant.toolCalls) {
+        const tc = currentAssistant.toolCalls.find((t) => t.id === msg.tool_call_id)
+        if (tc) {
+          let resultContent: ContentBlock[] = []
+          if (typeof msg.content === "string") {
+            resultContent = [{ type: "text", text: msg.content }]
+          } else if (Array.isArray(msg.content)) {
+            resultContent = msg.content
+          }
+          tc.result = resultContent
+          tc.isComplete = true
+          const firstText = resultContent.find((b) => b.type === "text")?.text || ""
+          tc.isError = firstText.startsWith("Error")
+        }
+      }
+    }
+  }
+
+  flushAssistant()
+  return result
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -49,15 +137,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   abortController: null,
 
   loadHistory: async (agentId) => {
-    // 切换 agent 时先清空旧消息
     set({ messages: [], isStreaming: false })
     try {
       const history = await api.getHistory(agentId)
-      const msgs: ChatMessage[] = []
-      for (const m of history) {
-        const converted = convertHistoryMessage(m)
-        if (converted) msgs.push(converted)
-      }
+      const msgs = convertHistoryMessages(history)
       set({ messages: msgs })
     } catch (err) {
       console.warn("Failed to load history:", err)
@@ -79,7 +162,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       isStreaming: false,
     }
 
-    // Preview uploaded images
     if (images && images.length > 0) {
       userMsg.images = images.map((f) => ({
         data: URL.createObjectURL(f),
@@ -92,6 +174,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       role: "assistant",
       content: "",
       toolCalls: [],
+      segments: [],
       isStreaming: true,
     }
 
@@ -109,22 +192,37 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const last = { ...msgs[msgs.length - 1] }
           msgs[msgs.length - 1] = last
 
+          // Clone mutable arrays
+          const segments = [...(last.segments || [])]
+          const toolCalls = [...(last.toolCalls || [])]
+
           switch (event.type) {
             case "text_delta": {
               const delta = event.data as { content: string }
               last.content += delta.content
+
+              // Append to the last text segment, or create a new one
+              const lastSeg = segments[segments.length - 1]
+              if (lastSeg && lastSeg.type === "text") {
+                segments[segments.length - 1] = {
+                  type: "text",
+                  text: lastSeg.text + delta.content,
+                }
+              } else {
+                segments.push({ type: "text", text: delta.content })
+              }
               break
             }
             case "tool_call": {
               const tc = event.data as { id: string; name: string; arguments: string }
-              const toolCalls = [...(last.toolCalls || [])]
-              toolCalls.push({
+              const uiTc: UIToolCall = {
                 id: tc.id,
                 name: tc.name,
                 arguments: tc.arguments,
                 isComplete: false,
-              })
-              last.toolCalls = toolCalls
+              }
+              toolCalls.push(uiTc)
+              segments.push({ type: "tool_call", toolCall: uiTc })
               break
             }
             case "tool_result": {
@@ -133,7 +231,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 content: ContentBlock[]
                 is_error: boolean
               }
-              const toolCalls = [...(last.toolCalls || [])]
               const idx = toolCalls.findIndex((t) => t.id === tr.tool_call_id)
               if (idx !== -1) {
                 toolCalls[idx] = {
@@ -142,13 +239,29 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                   isError: tr.is_error,
                   isComplete: true,
                 }
+                // Also update the reference in segments
+                const segIdx = segments.findIndex(
+                  (seg) => seg.type === "tool_call" && seg.toolCall.id === tr.tool_call_id
+                )
+                if (segIdx !== -1) {
+                  segments[segIdx] = { type: "tool_call", toolCall: toolCalls[idx] }
+                }
               }
-              last.toolCalls = toolCalls
               break
             }
             case "error": {
               const err = event.data as { message: string }
-              last.content += `\n\n**Error:** ${err.message}`
+              const errText = `\n\n**Error:** ${err.message}`
+              last.content += errText
+              const lastSeg = segments[segments.length - 1]
+              if (lastSeg && lastSeg.type === "text") {
+                segments[segments.length - 1] = {
+                  type: "text",
+                  text: lastSeg.text + errText,
+                }
+              } else {
+                segments.push({ type: "text", text: errText })
+              }
               break
             }
             case "done": {
@@ -157,6 +270,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             }
           }
 
+          last.segments = segments
+          last.toolCalls = toolCalls
           return { messages: msgs }
         })
       },

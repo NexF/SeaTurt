@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -100,7 +102,8 @@ type chatRequestBody struct {
 }
 
 // buildRequestBody converts internal ChatMessages to the wire format,
-// applying the Provider's ContentFormatter to each message's Content.
+// applying the Provider's ContentFormatter to each message's Content,
+// and normalizing ToolCalls to ensure wire-format compliance.
 func (c *Client) buildRequestBody(messages []ChatMessage, tools []ToolDef, stream bool) ([]byte, error) {
 	wireMessages := make([]chatRequestMessage, 0, len(messages))
 	for _, m := range messages {
@@ -112,10 +115,16 @@ func (c *Client) buildRequestBody(messages []ChatMessage, tools []ToolDef, strea
 				return nil, fmt.Errorf("format content for role=%s: %w", m.Role, err)
 			}
 		}
+
+		// Normalize tool_calls to ensure wire-format compliance.
+		// LLM responses may contain non-standard values that fail when
+		// sent back (e.g. empty arguments, missing type field).
+		normalizedTC := normalizeToolCalls(m.ToolCalls)
+
 		wireMessages = append(wireMessages, chatRequestMessage{
 			Role:       m.Role,
 			Content:    formatted,
-			ToolCalls:  m.ToolCalls,
+			ToolCalls:  normalizedTC,
 			ToolCallID: m.ToolCallID,
 		})
 	}
@@ -125,6 +134,31 @@ func (c *Client) buildRequestBody(messages []ChatMessage, tools []ToolDef, strea
 		Tools:    tools,
 		Stream:   stream,
 	})
+}
+
+// normalizeToolCalls ensures all ToolCalls are wire-format compliant.
+// Fixes common issues from different LLM providers:
+//   - Empty arguments "" → "{}" (must be valid JSON)
+//   - Missing type field → "function"
+//   - Whitespace-only arguments → "{}"
+func normalizeToolCalls(tcs []ToolCall) []ToolCall {
+	if len(tcs) == 0 {
+		return tcs
+	}
+	normalized := make([]ToolCall, len(tcs))
+	for i, tc := range tcs {
+		normalized[i] = tc
+		// Ensure type is set
+		if normalized[i].Type == "" {
+			normalized[i].Type = "function"
+		}
+		// Ensure arguments is valid JSON
+		args := strings.TrimSpace(normalized[i].Function.Arguments)
+		if args == "" {
+			normalized[i].Function.Arguments = "{}"
+		}
+	}
+	return normalized
 }
 
 // ChatResponse is the non-streaming response.
@@ -173,6 +207,10 @@ func (c *Client) ChatCompletion(messages []ChatMessage, tools []ToolDef) (*ChatR
 		"tools", len(tools),
 		"body_bytes", len(body),
 	)
+	slog.Debug("llm request body",
+		"body", truncateLog(string(body), 10000),
+	)
+	dumpJSON("request", body)
 
 	start := time.Now()
 	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
@@ -194,21 +232,23 @@ func (c *Client) ChatCompletion(messages []ChatMessage, tools []ToolDef) (*ChatR
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		dumpJSON("error-request", body)
+		dumpJSON("error-response", respBody)
 		slog.Error("llm api error",
 			"url", url,
 			"model", c.model,
 			"status", resp.StatusCode,
 			"elapsed", elapsed,
-			"body_bytes", len(body),
-			"response", truncateLog(string(respBody), 1000),
+			"response", truncateLog(string(respBody), 2000),
 		)
 		return nil, fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var chatResp ChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
@@ -218,6 +258,7 @@ func (c *Client) ChatCompletion(messages []ChatMessage, tools []ToolDef) (*ChatR
 		"choices", len(chatResp.Choices),
 		"usage", chatResp.Usage,
 	)
+	dumpJSON("response", respBody)
 
 	return &chatResp, nil
 }
@@ -243,6 +284,10 @@ func (c *Client) ChatCompletionStream(messages []ChatMessage, tools []ToolDef, c
 		"tools", len(tools),
 		"body_bytes", len(body),
 	)
+	slog.Debug("llm request body",
+		"body", truncateLog(string(body), 10000),
+	)
+	dumpJSON("stream-request", body)
 
 	start := time.Now()
 	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
@@ -265,13 +310,14 @@ func (c *Client) ChatCompletionStream(messages []ChatMessage, tools []ToolDef, c
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		dumpJSON("stream-error-request", body)
+		dumpJSON("stream-error-response", respBody)
 		slog.Error("llm api error",
 			"url", url,
 			"model", c.model,
 			"status", resp.StatusCode,
 			"elapsed", time.Since(start),
-			"body_bytes", len(body),
-			"response", truncateLog(string(respBody), 1000),
+			"response", truncateLog(string(respBody), 2000),
 		)
 		return nil, fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -290,6 +336,11 @@ func (c *Client) ChatCompletionStream(messages []ChatMessage, tools []ToolDef, c
 			"error", err,
 		)
 		return nil, err
+	}
+
+	// Dump assembled response
+	if assembledJSON, e := json.Marshal(assembled); e == nil {
+		dumpJSON("stream-response", assembledJSON)
 	}
 
 	slog.Info("llm stream completed",
@@ -414,4 +465,23 @@ func truncateLog(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "...[truncated]"
+}
+
+// dumpJSON writes raw JSON bytes to a debug dump file for inspection.
+// Files are written to /tmp/seaturt-llm-dumps/ with a timestamp prefix.
+func dumpJSON(label string, data []byte) {
+	dir := "/tmp/seaturt-llm-dumps"
+	_ = os.MkdirAll(dir, 0755)
+	ts := time.Now().Format("20060102-150405.000")
+	name := fmt.Sprintf("%s-%s.json", ts, label)
+	fpath := filepath.Join(dir, name)
+
+	// Pretty-print if valid JSON
+	var buf bytes.Buffer
+	if json.Indent(&buf, data, "", "  ") == nil {
+		_ = os.WriteFile(fpath, buf.Bytes(), 0644)
+	} else {
+		_ = os.WriteFile(fpath, data, 0644)
+	}
+	slog.Debug("llm dump written", "file", fpath, "bytes", len(data))
 }

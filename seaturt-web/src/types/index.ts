@@ -52,6 +52,7 @@ export interface Message {
   role: "user" | "assistant" | "tool"
   content: string | ContentBlock[]
   tool_calls?: string
+  tool_call_id?: string
   created_at: string
 }
 
@@ -89,13 +90,18 @@ export interface DesktopInfo {
   status: string
 }
 
-// Chat UI types
+// Chat UI types — ordered segments for interleaved text + tool calls
+export type ChatSegment =
+  | { type: "text"; text: string }
+  | { type: "tool_call"; toolCall: UIToolCall }
+
 export interface ChatMessage {
   id: string
   role: "user" | "assistant"
-  content: string
+  content: string // plain text (kept for backward compat and simple rendering)
   images?: { data: string; mime_type: string }[]
-  toolCalls?: UIToolCall[]
+  toolCalls?: UIToolCall[] // flat list for quick ID lookup
+  segments?: ChatSegment[] // ordered interleaved content
   isStreaming?: boolean
 }
 
