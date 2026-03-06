@@ -145,7 +145,7 @@ export async function listFiles(
   return request(`/agents/${agentId}/files${query}`)
 }
 
-export async function getFileUrl(agentId: string, filepath: string): string {
+export function getFileUrl(agentId: string, filepath: string): string {
   return `${BASE}/agents/${agentId}/files/${filepath}`
 }
 

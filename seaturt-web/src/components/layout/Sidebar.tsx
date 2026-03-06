@@ -1,14 +1,31 @@
 import { useEffect, useState } from "react"
-import { Plus, Loader2 } from "lucide-react"
+import { Plus, Loader2, Moon, Sun } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAgentStore } from "@/stores/agentStore"
 import AgentCard from "@/components/agent/AgentCard"
 import CreateAgentDialog from "@/components/agent/CreateAgentDialog"
 
+function useTheme() {
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"))
+  const toggle = () => {
+    const next = !dark
+    setDark(next)
+    if (next) {
+      document.documentElement.classList.add("dark")
+      localStorage.setItem("theme", "dark")
+    } else {
+      document.documentElement.classList.remove("dark")
+      localStorage.setItem("theme", "light")
+    }
+  }
+  return { dark, toggle }
+}
+
 export default function Sidebar() {
   const { agents, loading, fetchAgents, fetchModels, selectAgent, selectedAgentId } =
     useAgentStore()
   const [createOpen, setCreateOpen] = useState(false)
+  const { dark, toggle } = useTheme()
 
   useEffect(() => {
     fetchAgents()
@@ -58,6 +75,19 @@ export default function Sidebar() {
             还没有 Agent，点击上方创建
           </p>
         )}
+      </div>
+
+      {/* Theme toggle */}
+      <div className="px-3 py-3 border-t border-border">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start gap-2 text-muted-foreground"
+          onClick={toggle}
+        >
+          {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          {dark ? "浅色主题" : "深色主题"}
+        </Button>
       </div>
 
       <CreateAgentDialog open={createOpen} onOpenChange={setCreateOpen} />

@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -17,7 +18,9 @@ type Server struct {
 }
 
 // NewServer creates and configures the HTTP server with all routes registered.
-func NewServer(port int, mgr *agent.Manager, maxImageSize int) *Server {
+// webFS is an optional embedded filesystem containing the frontend build output (dist/).
+// When nil, only the API is served (development mode).
+func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	engine.Use(gin.Recovery())
@@ -69,6 +72,12 @@ func NewServer(port int, mgr *agent.Manager, maxImageSize int) *Server {
 	engine.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// Serve embedded frontend in production mode
+	if webFS != nil {
+		setupStaticFiles(engine, webFS)
+		slog.Info("static file serving enabled (embed.FS)")
+	}
 
 	return &Server{engine: engine, port: port}
 }
@@ -139,4 +148,37 @@ func isAllowedOrigin(origin string) bool {
 		strings.HasPrefix(origin, "http://127.0.0.1") ||
 		strings.HasPrefix(origin, "https://localhost") ||
 		strings.HasPrefix(origin, "https://127.0.0.1")
+}
+
+// setupStaticFiles configures the Gin engine to serve embedded frontend files.
+// It serves /assets/* from the embedded FS and falls back to index.html for SPA routing.
+func setupStaticFiles(engine *gin.Engine, webFS fs.FS) {
+	httpFS := http.FS(webFS)
+
+	// Serve static assets
+	engine.StaticFS("/assets", httpFS)
+
+	// SPA fallback: any non-API, non-asset path returns index.html
+	engine.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+
+		// Don't serve index.html for API routes
+		if strings.HasPrefix(path, "/api") {
+			c.JSON(404, gin.H{"error": "not found"})
+			return
+		}
+
+		// Try to serve the exact file first (e.g. favicon.ico, robots.txt)
+		if !strings.HasPrefix(path, "/assets") && path != "/" {
+			f, err := webFS.Open(strings.TrimPrefix(path, "/"))
+			if err == nil {
+				f.Close()
+				c.FileFromFS(path, httpFS)
+				return
+			}
+		}
+
+		// Fallback to index.html for SPA routing
+		c.FileFromFS("index.html", httpFS)
+	})
 }

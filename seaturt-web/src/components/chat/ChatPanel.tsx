@@ -1,12 +1,12 @@
-import { useEffect, useRef, useCallback } from "react"
+import { useEffect, useRef, useCallback, useState } from "react"
 import { Settings, FolderOpen, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Agent, AgentStatus } from "@/types"
 import { useChatStore } from "@/stores/chatStore"
 import MessageBubble from "./MessageBubble"
 import InputBar from "./InputBar"
+import AgentSettings from "@/components/agent/AgentSettings"
 import { cn } from "@/lib/utils"
 
 const statusDot: Record<AgentStatus, string> = {
@@ -27,6 +27,7 @@ export default function ChatPanel({ agent, onToggleWorkspace, workspaceOpen }: P
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const userScrolledUp = useRef(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     loadHistory(agent.id)
@@ -72,7 +73,7 @@ export default function ChatPanel({ agent, onToggleWorkspace, workspaceOpen }: P
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSettingsOpen(true)}>
                   <Settings className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
@@ -114,6 +115,9 @@ export default function ChatPanel({ agent, onToggleWorkspace, workspaceOpen }: P
 
       {/* Input */}
       <InputBar agentId={agent.id} disabled={agent.status !== "running"} />
+
+      {/* Settings Dialog */}
+      <AgentSettings agent={agent} open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   )
 }

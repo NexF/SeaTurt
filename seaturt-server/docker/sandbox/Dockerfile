@@ -38,5 +38,17 @@ RUN chmod +x /usr/local/bin/mcp-server-core /usr/local/bin/mcp-server-desktop
 RUN mkdir -p /workspace && chown 1000:1000 /workspace
 VOLUME /workspace
 
-# Ports: 3000 (HTTP KasmVNC), 3001 (HTTPS KasmVNC)
+# Selkies config: lock 1080p resolution + enable shared session
+ENV SELKIES_IS_MANUAL_RESOLUTION_MODE=true \
+    SELKIES_MANUAL_WIDTH=1920 \
+    SELKIES_MANUAL_HEIGHT=1080 \
+    SELKIES_ENABLE_SHARED=true
+
+# Override Selkies launch script to add --enable-shared (multi-connection)
+# and --is-manual-resolution-mode (lock 1080p). The stock script only passes
+# --addr and --mode, ignoring SELKIES_* env vars for CLI flags.
+COPY svc-selkies-run /etc/s6-overlay/s6-rc.d/svc-selkies/run
+RUN chmod +x /etc/s6-overlay/s6-rc.d/svc-selkies/run
+
+# Ports: 3000 (HTTP Selkies), 3001 (HTTPS Selkies)
 EXPOSE 3000 3001

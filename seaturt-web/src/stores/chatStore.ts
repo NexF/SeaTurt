@@ -109,8 +109,10 @@ function convertHistoryMessages(msgs: Message[]): ChatMessage[] {
       }
     } else if (msg.role === "tool") {
       // Match this tool result to the current assistant's toolCalls
-      if (currentAssistant && currentAssistant.toolCalls) {
-        const tc = currentAssistant.toolCalls.find((t) => t.id === msg.tool_call_id)
+      const assistant = currentAssistant as ChatMessage | null
+      const toolCalls = assistant?.toolCalls
+      if (toolCalls) {
+        const tc = toolCalls.find((t: UIToolCall) => t.id === msg.tool_call_id)
         if (tc) {
           let resultContent: ContentBlock[] = []
           if (typeof msg.content === "string") {

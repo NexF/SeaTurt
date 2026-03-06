@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,6 +16,13 @@ import (
 	"github.com/seaturt/server/internal/llm"
 	"github.com/seaturt/server/internal/store"
 )
+
+// webDist embeds the frontend build output.
+// When building with `make release`, the web/dist directory is populated first.
+// In development mode, this will be empty and webFS will be nil.
+//
+//go:embed web/dist/*
+var webDist embed.FS
 
 func main() {
 	cfg := config.Load()
@@ -68,8 +77,19 @@ func main() {
 	// 启动时同步 Agent 状态与 Docker 容器实际状态
 	agentMgr.SyncAgentStates(context.Background())
 
+	// Check if embedded frontend exists (production mode)
+	var webFS fs.FS
+	if sub, err := fs.Sub(webDist, "web/dist"); err == nil {
+		// Verify it has content (index.html)
+		if f, err := sub.Open("index.html"); err == nil {
+			f.Close()
+			webFS = sub
+			slog.Info("embedded frontend detected, serving in production mode")
+		}
+	}
+
 	// 初始化 HTTP Server
-	server := api.NewServer(cfg.ServerPort, agentMgr, cfg.MaxImageSize)
+	server := api.NewServer(cfg.ServerPort, agentMgr, cfg.MaxImageSize, webFS)
 
 	fmt.Printf("SeaTurt server listening on :%d\n", cfg.ServerPort)
 	if err := server.Run(); err != nil {

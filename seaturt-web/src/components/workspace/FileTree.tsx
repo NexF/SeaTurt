@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 
 interface Props {
   agentId: string
+  onFileClick?: (path: string, name: string) => void
 }
 
 interface TreeNode extends FileEntry {
@@ -14,7 +15,7 @@ interface TreeNode extends FileEntry {
   open?: boolean
 }
 
-export default function FileTree({ agentId }: Props) {
+export default function FileTree({ agentId, onFileClick }: Props) {
   const [nodes, setNodes] = useState<TreeNode[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -64,6 +65,8 @@ export default function FileTree({ agentId }: Props) {
   const handleFileClick = (node: TreeNode) => {
     if (node.is_dir) {
       toggleDir(node.path)
+    } else if (onFileClick) {
+      onFileClick(node.path, node.name)
     } else {
       window.open(`/api/agents/${agentId}/files/${node.path}`, "_blank")
     }
