@@ -122,6 +122,12 @@ func RunLoop(cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (st
 		}
 
 		if err != nil {
+			slog.Error("LLM call failed",
+				"iteration", i,
+				"messages", len(messages),
+				"tools", len(toolDefs),
+				"error", err,
+			)
 			if streamFn != nil {
 				streamFn(StreamEvent{Type: "error", Data: map[string]string{"message": err.Error()}})
 			}

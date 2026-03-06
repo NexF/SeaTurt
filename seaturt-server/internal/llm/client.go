@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -163,20 +164,46 @@ func (c *Client) ChatCompletion(messages []ChatMessage, tools []ToolDef) (*ChatR
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
+	url := c.baseURL + "/chat/completions"
+	slog.Info("llm request",
+		"url", url,
+		"model", c.model,
+		"stream", false,
+		"messages", len(messages),
+		"tools", len(tools),
+		"body_bytes", len(body),
+	)
+
+	start := time.Now()
+	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	c.setHeaders(httpReq)
 
 	resp, err := c.httpClient.Do(httpReq)
+	elapsed := time.Since(start)
 	if err != nil {
+		slog.Error("llm request failed",
+			"url", url,
+			"model", c.model,
+			"elapsed", elapsed,
+			"error", err,
+		)
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		slog.Error("llm api error",
+			"url", url,
+			"model", c.model,
+			"status", resp.StatusCode,
+			"elapsed", elapsed,
+			"body_bytes", len(body),
+			"response", truncateLog(string(respBody), 1000),
+		)
 		return nil, fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
 	}
 
@@ -184,6 +211,13 @@ func (c *Client) ChatCompletion(messages []ChatMessage, tools []ToolDef) (*ChatR
 	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
+
+	slog.Info("llm response",
+		"model", c.model,
+		"elapsed", elapsed,
+		"choices", len(chatResp.Choices),
+		"usage", chatResp.Usage,
+	)
 
 	return &chatResp, nil
 }
@@ -200,7 +234,18 @@ func (c *Client) ChatCompletionStream(messages []ChatMessage, tools []ToolDef, c
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
+	url := c.baseURL + "/chat/completions"
+	slog.Info("llm request",
+		"url", url,
+		"model", c.model,
+		"stream", true,
+		"messages", len(messages),
+		"tools", len(tools),
+		"body_bytes", len(body),
+	)
+
+	start := time.Now()
+	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -208,16 +253,53 @@ func (c *Client) ChatCompletionStream(messages []ChatMessage, tools []ToolDef, c
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		slog.Error("llm request failed",
+			"url", url,
+			"model", c.model,
+			"elapsed", time.Since(start),
+			"error", err,
+		)
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		slog.Error("llm api error",
+			"url", url,
+			"model", c.model,
+			"status", resp.StatusCode,
+			"elapsed", time.Since(start),
+			"body_bytes", len(body),
+			"response", truncateLog(string(respBody), 1000),
+		)
 		return nil, fmt.Errorf("LLM API error %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	return c.consumeSSE(resp.Body, cb)
+	slog.Info("llm stream started",
+		"model", c.model,
+		"ttfb", time.Since(start),
+	)
+
+	assembled, err := c.consumeSSE(resp.Body, cb)
+	elapsed := time.Since(start)
+	if err != nil {
+		slog.Error("llm stream error",
+			"model", c.model,
+			"elapsed", elapsed,
+			"error", err,
+		)
+		return nil, err
+	}
+
+	slog.Info("llm stream completed",
+		"model", c.model,
+		"elapsed", elapsed,
+		"choices", len(assembled.Choices),
+		"usage", assembled.Usage,
+	)
+
+	return assembled, nil
 }
 
 // consumeSSE reads SSE lines, assembles deltas into a full ChatResponse.
@@ -324,4 +406,12 @@ func (c *Client) setHeaders(req *http.Request) {
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
+}
+
+// truncateLog truncates a string for safe logging.
+func truncateLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "...[truncated]"
 }
