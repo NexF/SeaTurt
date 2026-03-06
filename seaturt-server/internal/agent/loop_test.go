@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/seaturt/server/internal/llm"
@@ -98,4 +99,42 @@ func TestTruncateContentBlocks(t *testing.T) {
 	// Image should be untouched
 	assert.Equal(t, "image", truncated[1].Type)
 	assert.Equal(t, "aGVsbG8=", truncated[1].Image.Data)
+}
+
+// TestRunLoop_ContextAlreadyCancelled tests that RunLoop immediately returns when
+// the context is already cancelled before the first iteration.
+func TestRunLoop_ContextAlreadyCancelled(t *testing.T) {
+	t.Parallel()
+
+	// Create an already-cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// LoopConfig with nil LLMClient and empty Router — we expect RunLoop to exit at
+	// the first ctx checkpoint before ever calling LLMClient.
+	reg := mcp.NewToolRegistry()
+	cfg := LoopConfig{
+		LLMClient: nil,
+		Router:    mcp.NewRouter(reg, nil),
+	}
+
+	history := []llm.ChatMessage{
+		{Role: "user", Content: llm.Content{llm.NewTextContent("hello")}},
+	}
+
+	var events []StreamEvent
+	_, messages, err := RunLoop(ctx, cfg, history, func(event StreamEvent) {
+		events = append(events, event)
+	})
+
+	// Should return cancelled error
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cancelled")
+
+	// Should have emitted a "cancelled" event
+	require.NotEmpty(t, events)
+	assert.Equal(t, "cancelled", events[len(events)-1].Type)
+
+	// Messages should contain at least the original history (system + user)
+	assert.GreaterOrEqual(t, len(messages), 2)
 }

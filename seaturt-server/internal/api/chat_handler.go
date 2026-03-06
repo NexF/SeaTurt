@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -123,14 +124,53 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 		return
 	}
 
-	// Run agent loop with SSE streaming
+	// Create a cancellable context derived from the HTTP request context.
+	// This ctx is cancelled when:
+	//  1. Client disconnects (Gin cancels c.Request.Context())
+	//  2. POST /chat/cancel is called (CancelActiveSession)
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+	defer h.mgr.ClearActiveSession(id)
+
+	// Cancel any previous active session for this agent
+	h.mgr.CancelActiveSession(id)
+	// Register this session
+	h.mgr.SetActiveSession(id, cancel)
+
+	// Run agent loop with SSE streaming + incremental message saving
 	loopCfg := agent.LoopConfig{
 		LLMClient:    h.mgr.GetLLMClient(),
 		Router:       router,
 		SystemPrompt: h.mgr.LoadSystemPrompt(ag),
+		OnMessage: func(msg llm.ChatMessage) {
+			dbMsg := &agent.Message{
+				ID:        fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+				AgentID:   id,
+				Role:      msg.Role,
+				Content:   msg.Content,
+				CreatedAt: time.Now(),
+			}
+			if len(msg.ToolCalls) > 0 {
+				if tcJSON, err := json.Marshal(msg.ToolCalls); err == nil {
+					dbMsg.ToolCalls = string(tcJSON)
+				}
+			}
+			if msg.ToolCallID != "" {
+				dbMsg.ToolCallID = msg.ToolCallID
+			}
+			if err := store.CreateMessage(dbMsg); err != nil {
+				slog.Error("failed to save loop message", "role", msg.Role, "err", err)
+			}
+		},
+		OnToolCallStart: func(toolCallID string, toolCancel context.CancelFunc) {
+			h.mgr.SetActiveToolCall(id, toolCallID, toolCancel)
+		},
+		OnToolCallEnd: func(toolCallID string) {
+			h.mgr.ClearActiveToolCall(id, toolCallID)
+		},
 	}
 
-	finalContent, loopMessages, loopErr := agent.RunLoop(loopCfg, history, func(event agent.StreamEvent) {
+	_, _, loopErr := agent.RunLoop(ctx, loopCfg, history, func(event agent.StreamEvent) {
 		data, err := json.Marshal(event)
 		if err != nil {
 			return
@@ -148,42 +188,44 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 		fmt.Fprintf(c.Writer, "data: %s\n\n", errEvent)
 		flusher.Flush()
 	}
+}
 
-	// Save new messages produced by the loop.
-	// loopMessages = [system(injected)] + history + new messages.
-	// Skip system messages and the original history (len(history) non-system msgs).
-	historyLen := len(history)
-	skipped := 0
-	for _, lm := range loopMessages {
-		if lm.Role == "system" {
-			continue
-		}
-		if skipped < historyLen {
-			skipped++
-			continue
-		}
-		msg := &agent.Message{
-			ID:        fmt.Sprintf("msg_%d", time.Now().UnixNano()),
-			AgentID:   id,
-			Role:      lm.Role,
-			Content:   lm.Content,
-			CreatedAt: time.Now(),
-		}
-		// Serialize tool_calls if present
-		if len(lm.ToolCalls) > 0 {
-			if tcJSON, err := json.Marshal(lm.ToolCalls); err == nil {
-				msg.ToolCalls = string(tcJSON)
-			}
-		}
-		// Restore tool_call_id for tool messages
-		if lm.ToolCallID != "" {
-			msg.ToolCallID = lm.ToolCallID
-		}
-		if err := store.CreateMessage(msg); err != nil {
-			slog.Error("failed to save loop message", "role", lm.Role, "err", err)
-		}
+// CancelChat handles POST /api/agents/:id/chat/cancel — cancels the entire active chat session.
+func (h *ChatHandler) CancelChat(c *gin.Context) {
+	id := c.Param("id")
+
+	if _, err := h.mgr.Get(id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
 	}
-	_ = finalContent
+
+	cancelled := h.mgr.CancelActiveSession(id)
+	if !cancelled {
+		c.JSON(http.StatusOK, gin.H{"status": "no_active_session"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}
+
+// CancelToolCall handles POST /api/agents/:id/chat/cancel-tool/:toolCallId
+// Cancels a specific MCP tool call. The agent continues reasoning after receiving the cancellation result.
+func (h *ChatHandler) CancelToolCall(c *gin.Context) {
+	id := c.Param("id")
+	toolCallID := c.Param("toolCallId")
+
+	if _, err := h.mgr.Get(id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
+	}
+
+	cancelled := h.mgr.CancelActiveToolCall(id, toolCallID)
+	if !cancelled {
+		c.JSON(http.StatusOK, gin.H{"status": "tool_call_not_found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
 }
 
 // parseContent extracts content blocks from the request.

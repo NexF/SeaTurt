@@ -2,9 +2,12 @@ package api
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/seaturt/server/internal/agent"
@@ -58,6 +61,8 @@ func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS) *Ser
 
 			// Chat
 			agents.POST("/:id/chat", chatHandler.Chat)
+			agents.POST("/:id/chat/cancel", chatHandler.CancelChat)
+			agents.POST("/:id/chat/cancel-tool/:toolCallId", chatHandler.CancelToolCall)
 			agents.GET("/:id/history", chatHandler.GetHistory)
 			agents.DELETE("/:id/history", chatHandler.DeleteHistory)
 
@@ -151,14 +156,17 @@ func isAllowedOrigin(origin string) bool {
 }
 
 // setupStaticFiles configures the Gin engine to serve embedded frontend files.
-// It serves /assets/* from the embedded FS and falls back to index.html for SPA routing.
+// It serves /assets/* directly and falls back to index.html for SPA routing.
 func setupStaticFiles(engine *gin.Engine, webFS fs.FS) {
-	httpFS := http.FS(webFS)
+	// Serve /assets/* — sub into the "assets" subdirectory of the embedded FS
+	if assetsFS, err := fs.Sub(webFS, "assets"); err == nil {
+		engine.StaticFS("/assets", http.FS(assetsFS))
+	}
 
-	// Serve static assets
-	engine.StaticFS("/assets", httpFS)
+	// Pre-read index.html for SPA fallback
+	indexHTML, _ := fs.ReadFile(webFS, "index.html")
 
-	// SPA fallback: any non-API, non-asset path returns index.html
+	// All other non-API routes: try exact file, then fallback to index.html (SPA)
 	engine.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 
@@ -168,17 +176,23 @@ func setupStaticFiles(engine *gin.Engine, webFS fs.FS) {
 			return
 		}
 
-		// Try to serve the exact file first (e.g. favicon.ico, robots.txt)
-		if !strings.HasPrefix(path, "/assets") && path != "/" {
-			f, err := webFS.Open(strings.TrimPrefix(path, "/"))
-			if err == nil {
-				f.Close()
-				c.FileFromFS(path, httpFS)
+		// Try to serve the exact file (e.g. /vite.svg, /favicon.ico)
+		if path != "/" {
+			name := strings.TrimPrefix(path, "/")
+			if f, err := webFS.Open(name); err == nil {
+				defer f.Close()
+				ct := mime.TypeByExtension(filepath.Ext(name))
+				if ct == "" {
+					ct = "application/octet-stream"
+				}
+				c.Header("Content-Type", ct)
+				c.Status(http.StatusOK)
+				io.Copy(c.Writer, f)
 				return
 			}
 		}
 
 		// Fallback to index.html for SPA routing
-		c.FileFromFS("index.html", httpFS)
+		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	})
 }

@@ -10,7 +10,8 @@ interface ChatStore {
   loadHistory: (agentId: string) => Promise<void>
   clearHistory: (agentId: string) => Promise<void>
   sendMessage: (agentId: string, text: string, images?: File[]) => void
-  stopStreaming: () => void
+  stopStreaming: (agentId: string) => void
+  cancelToolCall: (agentId: string, toolCallId: string) => void
   reset: () => void
 }
 
@@ -138,7 +139,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   abortController: null,
 
   loadHistory: async (agentId) => {
-    set({ messages: [], isStreaming: false })
+    const { abortController } = get()
+    if (abortController) {
+      api.cancelChat(agentId).catch(() => {})
+      abortController.abort()
+    }
+    set({ messages: [], isStreaming: false, abortController: null })
     try {
       const history = await api.getHistory(agentId)
       const msgs = convertHistoryMessages(history)
@@ -269,6 +275,31 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               last.isStreaming = false
               break
             }
+            case "cancelled": {
+              // 后端已取消整轮对话，标记所有未完成的 tool calls
+              for (let i = 0; i < toolCalls.length; i++) {
+                if (!toolCalls[i].isComplete) {
+                  toolCalls[i] = {
+                    ...toolCalls[i],
+                    isComplete: true,
+                    isError: true,
+                    result: [{ type: "text", text: "已取消" }],
+                  }
+                }
+              }
+              // 同步更新 segments 中对应的 tool calls
+              for (let i = 0; i < segments.length; i++) {
+                const seg = segments[i]
+                if (seg.type === "tool_call" && !seg.toolCall.isComplete) {
+                  const updated = toolCalls.find(tc => tc.id === seg.toolCall.id)
+                  if (updated) {
+                    segments[i] = { type: "tool_call", toolCall: updated }
+                  }
+                }
+              }
+              last.isStreaming = false
+              break
+            }
           }
 
           last.segments = segments
@@ -295,20 +326,66 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ abortController: controller })
   },
 
-  stopStreaming: () => {
+  stopStreaming: (agentId) => {
     const { abortController } = get()
-    if (abortController) {
-      abortController.abort()
-      set((s) => {
-        const msgs = [...s.messages]
-        if (msgs.length > 0) {
-          const last = { ...msgs[msgs.length - 1] }
-          last.isStreaming = false
-          msgs[msgs.length - 1] = last
+    if (!abortController) return
+
+    // 1. 通知后端取消（先于 abort，因为 abort 会立刻断开 SSE）
+    api.cancelChat(agentId).catch(() => {})
+
+    // 2. abort 前端 SSE 连接
+    abortController.abort()
+
+    // 3. 更新 UI 状态
+    set((s) => {
+      const msgs = [...s.messages]
+      if (msgs.length > 0) {
+        const last = { ...msgs[msgs.length - 1] }
+        last.isStreaming = false
+        // 兜底标记未完成的 tool calls 为已取消
+        if (last.toolCalls?.length) {
+          last.toolCalls = last.toolCalls.map(tc =>
+            tc.isComplete ? tc : { ...tc, isComplete: true, isError: true, result: [{ type: "text", text: "已取消" }] }
+          )
         }
-        return { messages: msgs, isStreaming: false, abortController: null }
-      })
-    }
+        if (last.segments?.length) {
+          last.segments = last.segments.map(seg =>
+            seg.type === "tool_call" && !seg.toolCall.isComplete
+              ? { type: "tool_call" as const, toolCall: { ...seg.toolCall, isComplete: true, isError: true, result: [{ type: "text" as const, text: "已取消" }] } }
+              : seg
+          )
+        }
+        msgs[msgs.length - 1] = last
+      }
+      return { messages: msgs, isStreaming: false, abortController: null }
+    })
+  },
+
+  cancelToolCall: (agentId, toolCallId) => {
+    // 通知后端取消此 tool call（不断 SSE，agent 继续推理）
+    api.cancelToolCall(agentId, toolCallId).catch(() => {})
+
+    // 乐观更新 UI：立即标记此 tool call 为取消状态
+    set((s) => {
+      const msgs = [...s.messages]
+      const last = { ...msgs[msgs.length - 1] }
+      if (last.toolCalls) {
+        last.toolCalls = last.toolCalls.map(tc =>
+          tc.id === toolCallId && !tc.isComplete
+            ? { ...tc, isComplete: true, isError: true, result: [{ type: "text", text: "用户取消了此工具调用" }] }
+            : tc
+        )
+      }
+      if (last.segments) {
+        last.segments = last.segments.map(seg =>
+          seg.type === "tool_call" && seg.toolCall.id === toolCallId && !seg.toolCall.isComplete
+            ? { type: "tool_call" as const, toolCall: { ...seg.toolCall, isComplete: true, isError: true, result: [{ type: "text" as const, text: "用户取消了此工具调用" }] } }
+            : seg
+        )
+      }
+      msgs[msgs.length - 1] = last
+      return { messages: msgs }
+    })
   },
 
   reset: () => set({ messages: [], isStreaming: false, abortController: null }),

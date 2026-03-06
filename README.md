@@ -31,24 +31,68 @@
 ### 前置条件
 
 - Go 1.23+
+- Node.js 18+（前端构建）
 - Docker（推荐 [OrbStack](https://orbstack.dev)）
 
-### 构建 & 启动
+### 构建沙箱镜像
 
 ```bash
 cd seaturt-server
 
 # 构建沙箱镜像（统一镜像，内置桌面环境 + MCP Server）
 make build-image
+```
 
-# 启动服务（日志输出到文件，方便排查）
-go run ./cmd/server/ 2>&1 | tee server.log
+### 开发模式（前后端分离）
+
+前后端分别启动，适合开发调试：
+
+```bash
+# 终端 1：启动后端
+cd seaturt-server
+make build && ./bin/containeragent-server
+
+# 终端 2：启动前端 dev server
+cd seaturt-web
+npm install
+npm run dev          # → http://localhost:5173
+```
+
+### 生产模式（单一二进制）
+
+前端通过 `go:embed` 嵌入后端二进制，部署时只需一个可执行文件：
+
+```bash
+cd seaturt-server
+
+# 一键构建：编译前端 → 复制到 embed 目录 → 编译 Go 二进制
+make release
+
+# 产物在 bin/seaturt（约 36MB，内含前端静态资源）
+ls -lh bin/seaturt
+
+# 启动（前端自动嵌入，访问 http://localhost:8080 即可）
+./bin/seaturt
 
 # 或后台启动
-nohup go run ./cmd/server/ > server.log 2>&1 &
+nohup ./bin/seaturt > server.log 2>&1 &
 
 # 实时查看日志
 tail -f server.log
+```
+
+`make release` 等价于以下步骤：
+
+```bash
+# 1. 构建前端
+cd seaturt-web && npm run build && cd ..
+
+# 2. 复制前端产物到 Go embed 目录
+rm -rf cmd/server/web/dist
+cp -r ../seaturt-web/dist cmd/server/web/dist
+
+# 3. 编译 Go 二进制（go:embed 自动打包前端）
+go build -o bin/seaturt ./cmd/server/
 ```
 
 ### 配置

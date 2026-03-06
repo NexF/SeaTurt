@@ -97,8 +97,8 @@ func TestSystemPrompt_Default(t *testing.T) {
 	// Should have default sections, not "附加指令"
 	assert.Contains(t, content, "## 身份")
 	assert.NotContains(t, content, "## 附加指令")
-	// Should not have desktop section
-	assert.NotContains(t, content, "## 桌面环境")
+	// Unified image: all agents now include desktop
+	assert.Contains(t, content, "## 桌面环境")
 }
 
 // IT-42: When specifying system_prompt, it should appear in the "附加指令" section.
@@ -126,15 +126,19 @@ func TestSystemPrompt_Custom(t *testing.T) {
 	assert.Contains(t, content, customPrompt)
 }
 
-// IT-43: When desktop=true, SYSTEM.md should include desktop-related instructions.
+// IT-43: All agents have desktop capabilities (unified image), SYSTEM.md should include desktop-related instructions.
 func TestSystemPrompt_Desktop(t *testing.T) {
 	t.Parallel()
 	ts, _ := newTestServer(t, nil)
 
-	ag := createDesktopAgent(t, ts, "desktop-prompt-test")
-	if ag == nil {
-		t.Skip("desktop agent creation failed (test image may not have mcp-server-desktop)")
-	}
+	// All agents now include desktop MCP server by default (unified image)
+	resp := doRequest(t, ts, "POST", "/api/agents", map[string]any{
+		"name": "desktop-prompt-test",
+	})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var ag agentpkg.Agent
+	decodeJSON(t, resp, &ag)
 	defer doRequest(t, ts, "DELETE", "/api/agents/"+ag.ID, nil)
 
 	systemMDPath := filepath.Join(ag.WorkspacePath, ".seaturt", "SYSTEM.md")

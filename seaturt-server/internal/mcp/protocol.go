@@ -60,9 +60,9 @@ type ServerInfo struct {
 
 // ToolDefinition describes a single tool exposed by an MCP server.
 type ToolDefinition struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	InputSchema any    `json:"inputSchema"`
+	Name        string `json:"name" yaml:"name"`
+	Description string `json:"description" yaml:"description"`
+	InputSchema any    `json:"inputSchema" yaml:"inputSchema"`
 }
 
 // ToolsListResult is the response to tools/list.

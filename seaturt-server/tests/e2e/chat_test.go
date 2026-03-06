@@ -38,7 +38,7 @@ func newE2ETestServer(t *testing.T) *httptest.Server {
 	cfg.WorkspaceRoot = wsRoot
 
 	agentMgr := agentpkg.NewManager(&cfg, s, dockerMgr, llmClient)
-	server := api.NewServer(0, agentMgr, cfg.MaxImageSize)
+	server := api.NewServer(0, agentMgr, cfg.MaxImageSize, nil)
 
 	ts := httptest.NewServer(server)
 

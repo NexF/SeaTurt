@@ -1,99 +1,75 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
 )
 
-// Router maps tool names to their corresponding MCP clients.
-// When the LLM issues a tool_call, the Router determines which MCP server handles it.
+// Router maps tool names (in "mcpname-toolname" format) to their MCP servers
+// and executes tool calls via the Executor.
 type Router struct {
-	mu    sync.RWMutex
-	routes map[string]*Client // tool_name -> client
+	mu       sync.RWMutex
+	registry *ToolRegistry
+	executor *Executor
 }
 
-// NewRouter creates a Router from an MCP client Pool.
-// It builds the routing table by iterating all clients and their tools.
-func NewRouter(pool *Pool) *Router {
-	r := &Router{
-		routes: make(map[string]*Client),
+// NewRouter creates a Router from a ToolRegistry and Executor.
+func NewRouter(registry *ToolRegistry, executor *Executor) *Router {
+	return &Router{
+		registry: registry,
+		executor: executor,
 	}
-	r.Rebuild(pool)
-	return r
 }
 
-// Rebuild reconstructs the routing table from the current pool state.
-// Call this after adding/removing MCP servers from the pool.
-func (r *Router) Rebuild(pool *Pool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.routes = make(map[string]*Client)
-	for _, client := range pool.AllClients() {
-		for _, tool := range client.Tools() {
-			if existing, ok := r.routes[tool.Name]; ok {
-				slog.Warn("duplicate tool name, later server wins",
-					"tool", tool.Name,
-					"existing_server", existing.Name(),
-					"new_server", client.Name(),
-				)
-			}
-			r.routes[tool.Name] = client
-		}
+// Route executes a tool call:
+// 1. Parse "mcpname-toolname" → serverName + originalToolName
+// 2. Look up server definition from registry
+// 3. Execute via Executor with the original tool name
+func (r *Router) Route(ctx context.Context, qualifiedName string, args map[string]any) (*CallToolResult, error) {
+	serverName, toolName, err := SplitToolName(qualifiedName)
+	if err != nil {
+		return nil, err
 	}
 
-	slog.Info("tool router rebuilt", "routes", len(r.routes))
-}
-
-// Route executes a tool call by looking up the appropriate MCP client and forwarding the request.
-func (r *Router) Route(toolName string, args map[string]any) (*CallToolResult, error) {
 	r.mu.RLock()
-	client, ok := r.routes[toolName]
+	server, err := r.registry.GetServer(serverName)
 	r.mu.RUnlock()
-
-	if !ok {
-		return nil, fmt.Errorf("unknown tool: %s", toolName)
+	if err != nil {
+		return nil, err
 	}
 
 	slog.Debug("routing tool call",
+		"qualified_name", qualifiedName,
+		"server", serverName,
 		"tool", toolName,
-		"server", client.Name(),
+		"command", server.Command,
 	)
 
-	result, err := client.CallTool(toolName, args)
+	// Execute with the original tool name (MCP Server doesn't know about the prefix)
+	result, err := r.executor.Execute(ctx, server.Command, toolName, args)
 	if err != nil {
-		return nil, fmt.Errorf("call tool %s on %s: %w", toolName, client.Name(), err)
+		return nil, fmt.Errorf("call tool %s on %s: %w", toolName, serverName, err)
 	}
 
 	return result, nil
 }
 
-// ToolNames returns all registered tool names.
-func (r *Router) ToolNames() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	names := make([]string, 0, len(r.routes))
-	for name := range r.routes {
-		names = append(names, name)
-	}
-	return names
-}
-
-// AllTools returns all tool definitions from the routing table.
+// AllTools returns all tool definitions from the registry.
+// Tool names are in "mcpname-toolname" format (e.g. "core-shell_exec").
 func (r *Router) AllTools() []ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.registry.AllTools()
+}
 
-	seen := make(map[string]bool)
-	var tools []ToolDefinition
-	for _, client := range r.routes {
-		for _, tool := range client.Tools() {
-			if !seen[tool.Name] {
-				seen[tool.Name] = true
-				tools = append(tools, tool)
-			}
-		}
+// ToolNames returns all registered tool names.
+func (r *Router) ToolNames() []string {
+	tools := r.AllTools()
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, t.Name)
 	}
-	return tools
+	return names
 }

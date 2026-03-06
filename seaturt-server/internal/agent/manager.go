@@ -28,7 +28,7 @@ type Store interface {
 }
 
 // Manager manages Agent lifecycle: create, start, stop, delete.
-// It coordinates container, MCP pool, and router for each agent.
+// It coordinates container, MCP registry, and router for each agent.
 type Manager struct {
 	mu        sync.RWMutex
 	cfg       *config.Config
@@ -37,20 +37,95 @@ type Manager struct {
 	llmClient *llm.Client
 
 	// Per-agent runtime state (only for running agents)
-	pools   map[string]*mcp.Pool   // agent_id -> pool
-	routers map[string]*mcp.Router // agent_id -> router
+	registries map[string]*mcp.ToolRegistry // agent_id -> registry
+	routers    map[string]ToolRouter        // agent_id -> router (ToolRouter interface)
+
+	// Per-agent active chat session cancel functions.
+	// Key: agentID, Value: context.CancelFunc for the running RunLoop.
+	activeSessions map[string]context.CancelFunc
+
+	// Per-agent active tool call cancel functions.
+	// Key: agentID, Value: map[toolCallID]context.CancelFunc
+	activeToolCalls map[string]map[string]context.CancelFunc
 }
 
 // NewManager creates a new Agent Manager.
 func NewManager(cfg *config.Config, s Store, docker *container.Manager, llmClient *llm.Client) *Manager {
 	return &Manager{
-		cfg:       cfg,
-		store:     s,
-		docker:    docker,
-		llmClient: llmClient,
-		pools:     make(map[string]*mcp.Pool),
-		routers:   make(map[string]*mcp.Router),
+		cfg:             cfg,
+		store:           s,
+		docker:          docker,
+		llmClient:       llmClient,
+		registries:      make(map[string]*mcp.ToolRegistry),
+		routers:         make(map[string]ToolRouter),
+		activeSessions:  make(map[string]context.CancelFunc),
+		activeToolCalls: make(map[string]map[string]context.CancelFunc),
 	}
+}
+
+// SetActiveSession registers the cancel function for an agent's active chat session.
+func (m *Manager) SetActiveSession(agentID string, cancel context.CancelFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, ok := m.activeSessions[agentID]; ok {
+		existing()
+	}
+	m.activeSessions[agentID] = cancel
+}
+
+// ClearActiveSession removes the cancel function for an agent's active chat session.
+func (m *Manager) ClearActiveSession(agentID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.activeSessions, agentID)
+}
+
+// CancelActiveSession cancels the active chat session for an agent.
+// Returns true if there was an active session to cancel.
+func (m *Manager) CancelActiveSession(agentID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cancel, ok := m.activeSessions[agentID]; ok {
+		cancel()
+		delete(m.activeSessions, agentID)
+		delete(m.activeToolCalls, agentID)
+		return true
+	}
+	return false
+}
+
+// SetActiveToolCall registers a cancel function for a specific tool call.
+func (m *Manager) SetActiveToolCall(agentID, toolCallID string, cancel context.CancelFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.activeToolCalls[agentID] == nil {
+		m.activeToolCalls[agentID] = make(map[string]context.CancelFunc)
+	}
+	m.activeToolCalls[agentID][toolCallID] = cancel
+}
+
+// ClearActiveToolCall removes the cancel function for a specific tool call.
+func (m *Manager) ClearActiveToolCall(agentID, toolCallID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if calls, ok := m.activeToolCalls[agentID]; ok {
+		delete(calls, toolCallID)
+	}
+}
+
+// CancelActiveToolCall cancels a specific tool call for an agent.
+// Returns true if the tool call was found and cancelled.
+func (m *Manager) CancelActiveToolCall(agentID, toolCallID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if calls, ok := m.activeToolCalls[agentID]; ok {
+		if cancel, ok := calls[toolCallID]; ok {
+			cancel()
+			delete(calls, toolCallID)
+			return true
+		}
+	}
+	return false
 }
 
 // CreateAgentRequest is the input for creating a new agent.
@@ -177,23 +252,36 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		}
 	}
 
-	// Establish MCP connections
-	pool := mcp.NewPool()
-	var serverDefs []mcp.MCPServerDef
-	for _, s := range mcpServers {
-		serverDefs = append(serverDefs, mcp.MCPServerDef{Name: s.Name, Command: s.Command})
-	}
-
-	if err := pool.Connect(ctx, m.docker, containerID, serverDefs); err != nil {
+	// Write tools YAML to workspace/.seaturt/tools/
+	toolsDir := filepath.Join(workspacePath, ".seaturt", "tools")
+	if err := mcp.WriteBuiltinTools(toolsDir, nil); err != nil {
 		_ = m.docker.RemoveContainer(ctx, containerID)
-		return nil, fmt.Errorf("connect mcp: %w", err)
+		return nil, fmt.Errorf("write builtin tools: %w", err)
 	}
 
-	router := mcp.NewRouter(pool)
+	// Copy MCP server binaries from container staging dir to workspace tools dir
+	if err := m.copyMCPBinaries(ctx, containerID); err != nil {
+		_ = m.docker.RemoveContainer(ctx, containerID)
+		return nil, fmt.Errorf("copy mcp binaries: %w", err)
+	}
+
+	// Load tools from YAML (no MCP processes started)
+	registry := mcp.NewToolRegistry()
+	if err := registry.LoadFromDir(toolsDir); err != nil {
+		_ = m.docker.RemoveContainer(ctx, containerID)
+		return nil, fmt.Errorf("load tools: %w", err)
+	}
+
+	// Create Executor (saves docker manager + container ID + tools dir path inside container)
+	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
+	executor := mcp.NewExecutor(m.docker, containerID, containerToolsDir)
+
+	// Create Router
+	router := mcp.NewRouter(registry, executor)
 
 	// Save runtime state
 	m.mu.Lock()
-	m.pools[agentID] = pool
+	m.registries[agentID] = registry
 	m.routers[agentID] = router
 	m.mu.Unlock()
 
@@ -202,10 +290,9 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 
 	// Persist to DB
 	if err := m.store.CreateAgent(ag); err != nil {
-		pool.CloseAll()
 		_ = m.docker.RemoveContainer(ctx, containerID)
 		m.mu.Lock()
-		delete(m.pools, agentID)
+		delete(m.registries, agentID)
 		delete(m.routers, agentID)
 		m.mu.Unlock()
 		return nil, fmt.Errorf("save agent: %w", err)
@@ -265,33 +352,30 @@ func (m *Manager) SyncAgentStates(ctx context.Context) {
 			continue
 		}
 
-		// Container is running — re-establish MCP connections
+		// Container is running — load tools from YAML (no MCP processes started)
 		if ag.Status != StatusRunning {
 			_ = m.store.UpdateAgentStatus(ag.ID, StatusRunning)
 		}
 
-		pool := mcp.NewPool()
-		var serverDefs []mcp.MCPServerDef
-		for _, s := range ag.Config.MCPServers {
-			serverDefs = append(serverDefs, mcp.MCPServerDef{Name: s.Name, Command: s.Command})
-		}
-
-		if err := pool.Connect(ctx, m.docker, ag.ContainerID, serverDefs); err != nil {
-			slog.Warn("agent container running but MCP reconnect failed, marking error",
+		toolsDir := filepath.Join(ag.WorkspacePath, ".seaturt", "tools")
+		registry := mcp.NewToolRegistry()
+		if err := registry.LoadFromDir(toolsDir); err != nil {
+			slog.Warn("agent container running but tools load failed, marking error",
 				"id", ag.ID, "name", ag.Name, "err", err)
-			pool.CloseAll()
 			_ = m.store.UpdateAgentStatus(ag.ID, StatusError)
 			continue
 		}
 
-		router := mcp.NewRouter(pool)
+		containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
+		executor := mcp.NewExecutor(m.docker, ag.ContainerID, containerToolsDir)
+		router := mcp.NewRouter(registry, executor)
 
 		m.mu.Lock()
-		m.pools[ag.ID] = pool
+		m.registries[ag.ID] = registry
 		m.routers[ag.ID] = router
 		m.mu.Unlock()
 
-		slog.Info("agent state synced, reconnected",
+		slog.Info("agent state synced",
 			"id", ag.ID, "name", ag.Name,
 			"tools", len(router.AllTools()),
 		)
@@ -340,25 +424,19 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 			slog.Warn("failed to write PORTS.md on start", "err", err)
 		}
 	}
-	// Re-establish MCP connections
-	pool := mcp.NewPool()
-	var serverDefs []mcp.MCPServerDef
-	for _, s := range ag.Config.MCPServers {
-		serverDefs = append(serverDefs, mcp.MCPServerDef{Name: s.Name, Command: s.Command})
+	// Re-load tools from YAML (no MCP processes started)
+	toolsDir := filepath.Join(ag.WorkspacePath, ".seaturt", "tools")
+	registry := mcp.NewToolRegistry()
+	if err := registry.LoadFromDir(toolsDir); err != nil {
+		return fmt.Errorf("load tools: %w", err)
 	}
 
-	if err := pool.Connect(ctx, m.docker, ag.ContainerID, serverDefs); err != nil {
-		return fmt.Errorf("reconnect mcp: %w", err)
-	}
-
-	router := mcp.NewRouter(pool)
+	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
+	executor := mcp.NewExecutor(m.docker, ag.ContainerID, containerToolsDir)
+	router := mcp.NewRouter(registry, executor)
 
 	m.mu.Lock()
-	// Close old pool if any
-	if old, ok := m.pools[id]; ok {
-		old.CloseAll()
-	}
-	m.pools[id] = pool
+	m.registries[id] = registry
 	m.routers[id] = router
 	m.mu.Unlock()
 
@@ -381,13 +459,10 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		return fmt.Errorf("agent already stopped")
 	}
 
-	// Close MCP connections
+	// Clean up runtime state (no long-lived connections to close)
 	m.mu.Lock()
-	if pool, ok := m.pools[id]; ok {
-		pool.CloseAll()
-		delete(m.pools, id)
-		delete(m.routers, id)
-	}
+	delete(m.registries, id)
+	delete(m.routers, id)
 	m.mu.Unlock()
 
 	// Stop container
@@ -412,13 +487,10 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("get agent: %w", err)
 	}
 
-	// Close MCP connections
+	// Clean up runtime state (no long-lived connections to close)
 	m.mu.Lock()
-	if pool, ok := m.pools[id]; ok {
-		pool.CloseAll()
-		delete(m.pools, id)
-		delete(m.routers, id)
-	}
+	delete(m.registries, id)
+	delete(m.routers, id)
 	m.mu.Unlock()
 
 	// Remove container
@@ -443,7 +515,7 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 }
 
 // GetRouter returns the MCP router for an agent. Returns nil if not running.
-func (m *Manager) GetRouter(id string) *mcp.Router {
+func (m *Manager) GetRouter(id string) ToolRouter {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.routers[id]
@@ -482,6 +554,28 @@ func (m *Manager) GetMappedPorts(ctx context.Context, ag *Agent) (map[string]str
 		return nil, fmt.Errorf("agent has no container")
 	}
 	return m.docker.GetMappedPorts(ctx, ag.ContainerID)
+}
+
+// mcpBinsStagingDir is the container path where MCP server binaries are staged in the Docker image.
+const mcpBinsStagingDir = "/opt/seaturt/mcp-bins"
+
+// copyMCPBinaries copies MCP server binaries from the container staging directory
+// to /workspace/.seaturt/tools/ so that the Executor can find them.
+func (m *Manager) copyMCPBinaries(ctx context.Context, containerID string) error {
+	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
+	cmd := []string{"sh", "-c", fmt.Sprintf(
+		"cp %s/* %s/ && chmod +x %s/*",
+		mcpBinsStagingDir, containerToolsDir, containerToolsDir,
+	)}
+	result, err := m.docker.Exec(ctx, containerID, cmd)
+	if err != nil {
+		return fmt.Errorf("exec cp: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("cp failed (exit %d): %s", result.ExitCode, result.Stderr)
+	}
+	slog.Debug("mcp binaries copied to workspace", "container", containerID[:12])
+	return nil
 }
 
 // generateID creates a unique agent ID.

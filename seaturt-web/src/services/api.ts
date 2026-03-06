@@ -57,6 +57,16 @@ export async function deleteHistory(agentId: string): Promise<void> {
   await request(`/agents/${agentId}/history`, { method: "DELETE" })
 }
 
+// Cancel the entire active chat session
+export async function cancelChat(agentId: string): Promise<void> {
+  await request(`/agents/${agentId}/chat/cancel`, { method: "POST" })
+}
+
+// Cancel a specific tool call (agent continues reasoning)
+export async function cancelToolCall(agentId: string, toolCallId: string): Promise<void> {
+  await request(`/agents/${agentId}/chat/cancel-tool/${toolCallId}`, { method: "POST" })
+}
+
 export interface ChatPayload {
   text: string
   images?: File[]

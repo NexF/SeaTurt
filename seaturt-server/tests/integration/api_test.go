@@ -55,7 +55,7 @@ func newTestServer(t *testing.T, mockResponses []MockLLMResponse) (*httptest.Ser
 	}
 
 	agentMgr := agentpkg.NewManager(cfg, testStore, dockerMgr, llmClient)
-	server := api.NewServer(0, agentMgr, 20*1024*1024)
+	server := api.NewServer(0, agentMgr, 20*1024*1024, nil)
 
 	// Use httptest to wrap the gin engine
 	_ = server // We need the engine, let's access it through the Server
@@ -349,7 +349,7 @@ func newTestServerWithProviders(t *testing.T, mockResponses []MockLLMResponse) (
 	}
 
 	agentMgr := agentpkg.NewManager(cfg, testStore, dockerMgr, llmClient)
-	server := api.NewServer(0, agentMgr, 20*1024*1024)
+	server := api.NewServer(0, agentMgr, 20*1024*1024, nil)
 	ts := httptest.NewServer(getEngineFromServer(server))
 
 	t.Cleanup(func() {

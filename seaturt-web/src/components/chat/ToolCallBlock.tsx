@@ -2,13 +2,16 @@ import { useState } from "react"
 import { ChevronRight, ChevronDown, Loader2, Check, X, Wrench } from "lucide-react"
 import { UIToolCall } from "@/types"
 import { cn } from "@/lib/utils"
+import { useChatStore } from "@/stores/chatStore"
 
 interface Props {
   toolCall: UIToolCall
+  agentId: string
 }
 
-export default function ToolCallBlock({ toolCall }: Props) {
+export default function ToolCallBlock({ toolCall, agentId }: Props) {
   const [expanded, setExpanded] = useState(false)
+  const cancelToolCall = useChatStore((s) => s.cancelToolCall)
 
   const isRunning = !toolCall.isComplete
   const isError = toolCall.isError
@@ -59,6 +62,17 @@ export default function ToolCallBlock({ toolCall }: Props) {
           )}
           {isError && <X className="h-3.5 w-3.5 text-destructive" />}
         </span>
+        {isRunning && (
+          <button
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-1"
+            onClick={(e) => {
+              e.stopPropagation()
+              cancelToolCall(agentId, toolCall.id)
+            }}
+          >
+            取消
+          </button>
+        )}
         {expanded ? (
           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
         ) : (

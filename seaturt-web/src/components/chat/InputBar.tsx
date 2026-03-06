@@ -149,7 +149,7 @@ export default function InputBar({ agentId, disabled }: Props) {
             variant="destructive"
             size="icon"
             className="h-9 w-9 flex-shrink-0"
-            onClick={stopStreaming}
+            onClick={() => stopStreaming(agentId)}
           >
             <Square className="h-4 w-4" />
           </Button>

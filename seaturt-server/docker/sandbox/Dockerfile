@@ -29,10 +29,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
-# Install MCP servers
-COPY --from=builder /mcp-server-core /usr/local/bin/mcp-server-core
-COPY --from=builder /mcp-server-desktop /usr/local/bin/mcp-server-desktop
-RUN chmod +x /usr/local/bin/mcp-server-core /usr/local/bin/mcp-server-desktop
+# Install MCP server binaries to a staging directory.
+# At runtime, manager.go copies them to /workspace/.seaturt/tools/
+# so that the Executor can locate them via the same toolsDir path.
+COPY --from=builder /mcp-server-core /opt/seaturt/mcp-bins/mcp-server-core
+COPY --from=builder /mcp-server-desktop /opt/seaturt/mcp-bins/mcp-server-desktop
+RUN chmod +x /opt/seaturt/mcp-bins/mcp-server-core /opt/seaturt/mcp-bins/mcp-server-desktop
 
 # Create workspace directory
 RUN mkdir -p /workspace && chown 1000:1000 /workspace

@@ -7,9 +7,10 @@ import { Loader2 } from "lucide-react"
 
 interface Props {
   message: ChatMessage
+  agentId: string
 }
 
-export default function MessageBubble({ message }: Props) {
+export default function MessageBubble({ message, agentId }: Props) {
   const isUser = message.role === "user"
   const hasSegments = message.segments && message.segments.length > 0
 
@@ -52,7 +53,7 @@ export default function MessageBubble({ message }: Props) {
                 )
               }
               if (seg.type === "tool_call") {
-                return <ToolCallBlock key={seg.toolCall.id} toolCall={seg.toolCall} />
+                return <ToolCallBlock key={seg.toolCall.id} toolCall={seg.toolCall} agentId={agentId} />
               }
               return null
             })}

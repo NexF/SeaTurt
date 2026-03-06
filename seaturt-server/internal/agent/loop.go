@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,13 @@ import (
 	"github.com/seaturt/server/internal/llm"
 	"github.com/seaturt/server/internal/mcp"
 )
+
+// ToolRouter is the interface for routing tool calls.
+// mcp.Router implements this interface.
+type ToolRouter interface {
+	AllTools() []mcp.ToolDefinition
+	Route(ctx context.Context, toolName string, args map[string]any) (*mcp.CallToolResult, error)
+}
 
 const (
 	// MaxToolOutputLen is the maximum character length for a single tool output.
@@ -28,8 +36,19 @@ Be concise and precise in your responses.`
 // LoopConfig holds the configuration for an agent loop execution.
 type LoopConfig struct {
 	LLMClient    *llm.Client
-	Router       *mcp.Router
+	Router       ToolRouter
 	SystemPrompt string // if non-empty, use this prompt; otherwise fallback to DefaultSystemPrompt
+
+	// OnMessage is called each time a new message is produced (assistant / tool).
+	// It allows the caller to persist messages incrementally.
+	OnMessage func(msg llm.ChatMessage)
+
+	// OnToolCallStart is called when a tool call begins execution.
+	// It provides the tool call ID and a cancel function for that specific tool call.
+	OnToolCallStart func(toolCallID string, cancel context.CancelFunc)
+
+	// OnToolCallEnd is called when a tool call finishes (success, error, or cancelled).
+	OnToolCallEnd func(toolCallID string)
 }
 
 // StreamEvent represents an event emitted during the agent loop for SSE streaming.
@@ -70,7 +89,7 @@ type StreamFunc func(event StreamEvent)
 // The streamFn is called for each event (text delta, tool call, tool result).
 // It may be nil for non-streaming use.
 // Returns the full assistant response and the updated message history.
-func RunLoop(cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (string, []llm.ChatMessage, error) {
+func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (string, []llm.ChatMessage, error) {
 	// Collect all tools from the router and convert to OpenAI format
 	mcpTools := cfg.Router.AllTools()
 	toolDefs := llm.ConvertMCPTools(mcpTools)
@@ -95,16 +114,47 @@ func RunLoop(cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (st
 	messages := make([]llm.ChatMessage, len(history))
 	copy(messages, history)
 
+	// On exit, backfill any assistant tool_calls that lack a corresponding tool result.
+	// This happens when the loop is cancelled mid-execution (user interrupts a tool call).
+	// Without this, the next LLM request would fail because the API requires every
+	// tool_call to have a matching tool result message.
+	defer func() {
+		backfilled := backfillCancelledToolCalls(&messages)
+		for _, msg := range backfilled {
+			if cfg.OnMessage != nil {
+				cfg.OnMessage(msg)
+			}
+			if streamFn != nil {
+				streamFn(StreamEvent{
+					Type: "tool_result",
+					Data: ToolResultEvent{
+						ToolCallID: msg.ToolCallID,
+						Content:    []llm.ContentBlock(msg.Content),
+						IsError:    true,
+					},
+				})
+			}
+		}
+	}()
+
 	var finalContent string
 
 	for i := 0; i < MaxLoopIterations; i++ {
+		// Checkpoint: check ctx at the start of each iteration
+		if err := ctx.Err(); err != nil {
+			if streamFn != nil {
+				streamFn(StreamEvent{Type: "cancelled", Data: nil})
+			}
+			return "", messages, fmt.Errorf("cancelled: %w", err)
+		}
+
 		slog.Debug("agent loop iteration", "i", i)
 
 		var resp *llm.ChatResponse
 		var err error
 
 		if streamFn != nil {
-			resp, err = cfg.LLMClient.ChatCompletionStream(messages, toolDefs, func(delta llm.StreamDelta) error {
+			resp, err = cfg.LLMClient.ChatCompletionStream(ctx, messages, toolDefs, func(delta llm.StreamDelta) error {
 				for _, choice := range delta.Choices {
 					if choice.Delta != nil {
 						if text := choice.Delta.Content.String(); text != "" {
@@ -118,7 +168,7 @@ func RunLoop(cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (st
 				return nil
 			})
 		} else {
-			resp, err = cfg.LLMClient.ChatCompletion(messages, toolDefs)
+			resp, err = cfg.LLMClient.ChatCompletion(ctx, messages, toolDefs)
 		}
 
 		if err != nil {
@@ -128,6 +178,38 @@ func RunLoop(cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (st
 				"tools", len(toolDefs),
 				"error", err,
 			)
+
+			// If there's a partial response (e.g. stream interrupted by cancellation),
+			// persist the accumulated assistant message so it's not lost.
+			if resp != nil {
+				slog.Info("partial response check",
+					"choices_len", len(resp.Choices),
+					"resp_id", resp.ID,
+				)
+				if len(resp.Choices) > 0 {
+					partialMsg := resp.Choices[0].Message
+					slog.Info("partial message details",
+						"role", partialMsg.Role,
+						"content_str", partialMsg.Content.String(),
+						"content_len", len(partialMsg.Content.String()),
+						"content_blocks", len(partialMsg.Content),
+						"tool_calls", len(partialMsg.ToolCalls),
+					)
+					if partialMsg.Content.String() != "" || len(partialMsg.ToolCalls) > 0 {
+						messages = append(messages, partialMsg)
+						if cfg.OnMessage != nil {
+							cfg.OnMessage(partialMsg)
+						}
+						slog.Info("saved partial assistant message on interruption",
+							"content_len", len(partialMsg.Content.String()),
+							"tool_calls", len(partialMsg.ToolCalls),
+						)
+					}
+				}
+			} else {
+				slog.Info("no partial response (resp is nil)")
+			}
+
 			if streamFn != nil {
 				streamFn(StreamEvent{Type: "error", Data: map[string]string{"message": err.Error()}})
 			}
@@ -142,6 +224,9 @@ func RunLoop(cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (st
 
 		// Append assistant message to history
 		messages = append(messages, assistantMsg)
+		if cfg.OnMessage != nil {
+			cfg.OnMessage(assistantMsg)
+		}
 
 		// No tool calls → final response
 		if len(assistantMsg.ToolCalls) == 0 {
@@ -155,6 +240,14 @@ func RunLoop(cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (st
 
 		// Process tool calls
 		for _, tc := range assistantMsg.ToolCalls {
+			// Checkpoint: check ctx before each tool call
+			if err := ctx.Err(); err != nil {
+				if streamFn != nil {
+					streamFn(StreamEvent{Type: "cancelled", Data: nil})
+				}
+				return "", messages, fmt.Errorf("cancelled: %w", err)
+			}
+
 			if streamFn != nil {
 				streamFn(StreamEvent{
 					Type: "tool_call",
@@ -177,11 +270,15 @@ func RunLoop(cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (st
 				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 					toolResult := fmt.Sprintf("Error parsing arguments: %s", err.Error())
 					toolResultBlocks := []llm.ContentBlock{llm.NewTextContent(toolResult)}
-					messages = append(messages, llm.ChatMessage{
+					toolMsg := llm.ChatMessage{
 						Role:       "tool",
 						Content:    llm.Content(toolResultBlocks),
 						ToolCallID: tc.ID,
-					})
+					}
+					messages = append(messages, toolMsg)
+					if cfg.OnMessage != nil {
+						cfg.OnMessage(toolMsg)
+					}
 					if streamFn != nil {
 						streamFn(StreamEvent{
 							Type: "tool_result",
@@ -192,8 +289,63 @@ func RunLoop(cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (st
 				}
 			}
 
-			// Execute via router
-			result, err := cfg.Router.Route(tc.Function.Name, args)
+			// Create per-tool-call context (derived from chat ctx)
+			toolCtx, toolCancel := context.WithCancel(ctx)
+
+			// Register tool call cancel function for external cancellation
+			if cfg.OnToolCallStart != nil {
+				cfg.OnToolCallStart(tc.ID, toolCancel)
+			}
+
+			// Execute via router (pass toolCtx for per-tool cancellation)
+			result, err := cfg.Router.Route(toolCtx, tc.Function.Name, args)
+
+			// Check cancellation BEFORE calling toolCancel() — otherwise
+			// toolCtx.Err() would always be non-nil and we can't distinguish
+			// user-cancelled from normal completion.
+			wasCancelled := err != nil && toolCtx.Err() != nil && ctx.Err() == nil
+
+			// Clean up: cancel context to prevent leak + unregister
+			toolCancel()
+			if cfg.OnToolCallEnd != nil {
+				cfg.OnToolCallEnd(tc.ID)
+			}
+
+			// Check if this was a per-tool cancellation (toolCtx cancelled but chat ctx still alive)
+			if wasCancelled {
+				// Single tool call cancelled by user, but chat continues
+				cancelledContent := llm.Content{llm.NewTextContent("用户取消了此工具调用")}
+				toolMsg := llm.ChatMessage{
+					Role:       "tool",
+					Content:    cancelledContent,
+					ToolCallID: tc.ID,
+				}
+				messages = append(messages, toolMsg)
+				if cfg.OnMessage != nil {
+					cfg.OnMessage(toolMsg)
+				}
+				if streamFn != nil {
+					streamFn(StreamEvent{
+						Type: "tool_result",
+						Data: ToolResultEvent{
+							ToolCallID: tc.ID,
+							Content:    []llm.ContentBlock(cancelledContent),
+							IsError:    true,
+						},
+					})
+				}
+				// Don't return — continue processing remaining tool calls or next LLM round
+				continue
+			}
+
+			// Check if chat-level context was cancelled
+			if err != nil && ctx.Err() != nil {
+				if streamFn != nil {
+					streamFn(StreamEvent{Type: "cancelled", Data: nil})
+				}
+				return "", messages, fmt.Errorf("cancelled: %w", ctx.Err())
+			}
+
 			var toolContent llm.Content
 			var isError bool
 
@@ -208,11 +360,15 @@ func RunLoop(cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (st
 			// Truncation protection (only text blocks)
 			toolContent = truncateContentBlocks(toolContent, MaxToolOutputLen)
 
-			messages = append(messages, llm.ChatMessage{
+			toolMsg := llm.ChatMessage{
 				Role:       "tool",
 				Content:    toolContent,
 				ToolCallID: tc.ID,
-			})
+			}
+			messages = append(messages, toolMsg)
+			if cfg.OnMessage != nil {
+				cfg.OnMessage(toolMsg)
+			}
 
 			if streamFn != nil {
 				streamFn(StreamEvent{
@@ -273,4 +429,62 @@ func truncateOutput(content string, maxLen int) string {
 	runes := []rune(content)
 	truncated := string(runes[:maxLen])
 	return truncated + fmt.Sprintf("\n\n[OUTPUT TRUNCATED: showing %d of %d characters]", maxLen, len(runes))
+}
+
+// backfillCancelledToolCalls scans the message history from the end and injects
+// synthetic "cancelled" tool result messages for any assistant tool_calls that
+// don't have a corresponding tool result. This repairs the message history so
+// the next LLM API call won't fail with a parameter error.
+//
+// It modifies the messages slice in-place (via the pointer) and returns the
+// list of newly injected messages (so the caller can persist/stream them).
+func backfillCancelledToolCalls(messages *[]llm.ChatMessage) []llm.ChatMessage {
+	msgs := *messages
+	if len(msgs) == 0 {
+		return nil
+	}
+
+	// Walk backwards to find the last assistant message with tool_calls.
+	// Collect tool_call IDs that already have a matching tool result after it.
+	var lastAssistantIdx int = -1
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "assistant" && len(msgs[i].ToolCalls) > 0 {
+			lastAssistantIdx = i
+			break
+		}
+	}
+	if lastAssistantIdx < 0 {
+		return nil
+	}
+
+	// Collect which tool_call IDs already have results
+	answeredIDs := make(map[string]bool)
+	for i := lastAssistantIdx + 1; i < len(msgs); i++ {
+		if msgs[i].Role == "tool" && msgs[i].ToolCallID != "" {
+			answeredIDs[msgs[i].ToolCallID] = true
+		}
+	}
+
+	// Find missing ones
+	var injected []llm.ChatMessage
+	for _, tc := range msgs[lastAssistantIdx].ToolCalls {
+		if answeredIDs[tc.ID] {
+			continue
+		}
+		cancelMsg := llm.ChatMessage{
+			Role:       "tool",
+			Content:    llm.Content{llm.NewTextContent("工具调用被取消（用户中断）")},
+			ToolCallID: tc.ID,
+		}
+		injected = append(injected, cancelMsg)
+		slog.Info("backfilled cancelled tool result",
+			"tool_call_id", tc.ID,
+			"tool_name", tc.Function.Name,
+		)
+	}
+
+	if len(injected) > 0 {
+		*messages = append(msgs, injected...)
+	}
+	return injected
 }

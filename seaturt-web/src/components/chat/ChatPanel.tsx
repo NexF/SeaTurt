@@ -108,7 +108,7 @@ export default function ChatPanel({ agent, onToggleWorkspace, workspaceOpen }: P
           </div>
         )}
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
+          <MessageBubble key={msg.id} message={msg} agentId={agent.id} />
         ))}
         <div ref={bottomRef} />
       </div>

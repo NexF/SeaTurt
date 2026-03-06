@@ -3,6 +3,7 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -192,7 +193,7 @@ type StreamDelta struct {
 // --- API calls ---
 
 // ChatCompletion performs a non-streaming chat completion.
-func (c *Client) ChatCompletion(messages []ChatMessage, tools []ToolDef) (*ChatResponse, error) {
+func (c *Client) ChatCompletion(ctx context.Context, messages []ChatMessage, tools []ToolDef) (*ChatResponse, error) {
 	body, err := c.buildRequestBody(messages, tools, false)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -213,7 +214,7 @@ func (c *Client) ChatCompletion(messages []ChatMessage, tools []ToolDef) (*ChatR
 	dumpJSON("request", body)
 
 	start := time.Now()
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -269,7 +270,7 @@ type StreamCallback func(delta StreamDelta) error
 // ChatCompletionStream performs a streaming chat completion.
 // The callback is invoked for each SSE delta. After the stream ends,
 // this returns the fully assembled ChatResponse.
-func (c *Client) ChatCompletionStream(messages []ChatMessage, tools []ToolDef, cb StreamCallback) (*ChatResponse, error) {
+func (c *Client) ChatCompletionStream(ctx context.Context, messages []ChatMessage, tools []ToolDef, cb StreamCallback) (*ChatResponse, error) {
 	body, err := c.buildRequestBody(messages, tools, true)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -290,7 +291,7 @@ func (c *Client) ChatCompletionStream(messages []ChatMessage, tools []ToolDef, c
 	dumpJSON("stream-request", body)
 
 	start := time.Now()
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -335,7 +336,9 @@ func (c *Client) ChatCompletionStream(messages []ChatMessage, tools []ToolDef, c
 			"elapsed", elapsed,
 			"error", err,
 		)
-		return nil, err
+		// Return partial response (if any) along with the error.
+		// This allows callers to persist content accumulated before interruption.
+		return assembled, err
 	}
 
 	// Dump assembled response
@@ -422,11 +425,9 @@ func (c *Client) consumeSSE(r io.Reader, cb StreamCallback) (*ChatResponse, erro
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read SSE stream: %w", err)
-	}
+	scanErr := scanner.Err()
 
-	// Build assembled response
+	// Build assembled response (even if stream was interrupted)
 	msg := ChatMessage{
 		Role:    "assistant",
 		Content: Content{NewTextContent(contentBuilder.String())},
@@ -443,6 +444,12 @@ func (c *Client) consumeSSE(r io.Reader, cb StreamCallback) (*ChatResponse, erro
 			Message:      msg,
 			FinishReason: finishReason,
 		},
+	}
+
+	if scanErr != nil {
+		// Return partial response along with the error so callers can
+		// persist what was accumulated before the stream was interrupted.
+		return assembled, fmt.Errorf("read SSE stream: %w", scanErr)
 	}
 
 	return assembled, nil

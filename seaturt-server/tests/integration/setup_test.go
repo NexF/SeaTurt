@@ -7,14 +7,20 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/seaturt/server/internal/container"
+	"github.com/seaturt/server/internal/mcp"
 	"github.com/seaturt/server/internal/store"
 )
 
 const testImage = "seaturt/sandbox:test"
+
+// mcpBinsStagingDir mirrors the constant in agent/manager.go — the container
+// path where MCP server binaries are staged in the Docker image.
+const mcpBinsStagingDir = "/opt/seaturt/mcp-bins"
 
 var (
 	dockerMgr     *container.Manager
@@ -77,8 +83,10 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// createTestContainer creates a running test container with a temp workspace.
-// It registers cleanup via t.Cleanup.
+// createTestContainer creates a running test container with a temp workspace,
+// writes builtin tool YAML definitions, and copies MCP server binaries from
+// the container staging directory to workspace/.seaturt/tools/.
+// This mirrors the full agent initialization flow in manager.Create().
 func createTestContainer(t *testing.T) (containerID string, workspacePath string) {
 	t.Helper()
 	ctx := context.Background()
@@ -102,6 +110,29 @@ func createTestContainer(t *testing.T) (containerID string, workspacePath string
 		t.Fatalf("start container: %v", err)
 	}
 
+	// Write builtin tool YAML definitions to host workspace (bind-mounted into container)
+	toolsDir := filepath.Join(workspacePath, ".seaturt", "tools")
+	if err := mcp.WriteBuiltinTools(toolsDir, nil); err != nil {
+		dockerMgr.RemoveContainer(ctx, id)
+		t.Fatalf("write builtin tools: %v", err)
+	}
+
+	// Copy MCP server binaries from container staging dir to workspace tools dir
+	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
+	cpCmd := []string{"sh", "-c", fmt.Sprintf(
+		"cp %s/* %s/ && chmod +x %s/*",
+		mcpBinsStagingDir, containerToolsDir, containerToolsDir,
+	)}
+	result, err := dockerMgr.Exec(ctx, id, cpCmd)
+	if err != nil {
+		dockerMgr.RemoveContainer(ctx, id)
+		t.Fatalf("copy mcp binaries: %v", err)
+	}
+	if result.ExitCode != 0 {
+		dockerMgr.RemoveContainer(ctx, id)
+		t.Fatalf("copy mcp binaries failed (exit %d): %s", result.ExitCode, result.Stderr)
+	}
+
 	// Give container a moment to initialize
 	time.Sleep(500 * time.Millisecond)
 
@@ -113,6 +144,22 @@ func createTestContainer(t *testing.T) (containerID string, workspacePath string
 	})
 
 	return id, workspacePath
+}
+
+// createTestRouter creates a Router + Executor for a test container.
+// This is the standard way to set up MCP tool execution in integration tests.
+func createTestRouter(t *testing.T, containerID, workspacePath string) *mcp.Router {
+	t.Helper()
+
+	toolsDir := filepath.Join(workspacePath, ".seaturt", "tools")
+	registry := mcp.NewToolRegistry()
+	if err := registry.LoadFromDir(toolsDir); err != nil {
+		t.Fatalf("load tool registry: %v", err)
+	}
+
+	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
+	executor := mcp.NewExecutor(dockerMgr, containerID, containerToolsDir)
+	return mcp.NewRouter(registry, executor)
 }
 
 // cleanupTestContainers removes any leftover test containers.

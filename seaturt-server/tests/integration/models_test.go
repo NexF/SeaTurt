@@ -183,5 +183,4 @@ func TestAgentCreate_MinimalRequest(t *testing.T) {
 	assert.Equal(t, "test-model", ag.Config.Model)
 	assert.Equal(t, agentpkg.StatusRunning, ag.Status)
 	assert.NotEmpty(t, ag.Config.MCPServers, "should have default MCP servers")
-	assert.False(t, ag.Config.Desktop, "desktop should default to false")
 }

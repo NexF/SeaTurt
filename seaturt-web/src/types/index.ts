@@ -73,7 +73,7 @@ export interface ToolResultEvent {
 }
 
 export interface StreamEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "error" | "done"
+  type: "text_delta" | "tool_call" | "tool_result" | "error" | "done" | "cancelled"
   data: TextDelta | ToolCallEvent | ToolResultEvent | { message: string } | null
 }
 
