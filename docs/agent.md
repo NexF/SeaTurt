@@ -38,6 +38,20 @@ api/router.go
 
 ## 数据模型
 
+### AgentConfig
+
+```go
+type AgentConfig struct {
+    Model       string            // LLM 模型标识 (如 "gpt-4o")
+    MCPServers  []MCPServerConfig // MCP Server 列表
+    ExtraMounts []string          // 额外挂载路径
+    EnvVars     map[string]string // 自定义环境变量
+    Desktop     bool              // 是否桌面模式（v0.0.3）
+    Resolution  string            // 桌面分辨率（v0.0.3，默认 "1920x1080x24"）
+    SystemPrompt string           // 用户自定义的额外 system prompt（v0.0.4）
+}
+```
+
 ### Agent
 
 ```go
@@ -49,34 +63,38 @@ type Agent struct {
     Image         string      // 使用的镜像
     WorkspacePath string      // 宿主机 workspace 路径
     Config        AgentConfig // 运行配置
+    VNCPort       string      // 宿主机 VNC 端口（桌面模式，v0.0.3，运行时字段）— 已弃用
+    NoVNCPort     string      // 宿主机 noVNC 端口（桌面模式，v0.0.3，运行时字段）— 已弃用
+    NoVNCURL      string      // noVNC 访问 URL（桌面模式，v0.0.3，运行时字段）— 已弃用
+    KasmVNCPort   string      // 宿主机 KasmVNC HTTP 端口（桌面模式，运行时字段）
+    KasmVNCURL    string      // KasmVNC 访问 URL（桌面模式，运行时字段）
     CreatedAt     time.Time
     UpdatedAt     time.Time
 }
 ```
 
-### AgentConfig
-
-```go
-type AgentConfig struct {
-    Model       string            // LLM 模型标识 (如 "gpt-4o")
-    MCPServers  []MCPServerConfig // MCP Server 列表
-    ExtraMounts []string          // 额外挂载路径
-    EnvVars     map[string]string // 自定义环境变量
-    Desktop     bool              // 是否桌面模式（v0.0.3）
-    SystemPrompt string           // 用户自定义的额外 system prompt（v0.0.4）
-}
-```
+> KasmVNCPort/KasmVNCURL 是运行时字段，不持久化到 DB，每次启动后从 Docker 端口映射查询获取（容器端口 3000 → 宿主机随机端口）。
 
 ### Status 流转
 
 ```
-created ──► running ──► stopped ──► (deleted)
-               │            │
-               │   Start    │
-               │◄───────────┘
-               │
-               └──► error
+                    Create
+                      │
+                      ▼
+created ──► running ◄──► stopped
+               │             │
+               │   docker rm │ docker rm
+               ▼             ▼
+            (deleted from DB + messages)
+
+               running ──► error  (MCP 连接失败等)
 ```
+
+> **与 Docker 容器状态对齐**：
+> - 容器 running → Agent `running`（MCP 连接活跃）
+> - 容器 stopped/exited → Agent `stopped`
+> - 容器被 `docker rm` → Agent 从 DB 删除
+> - 后端启动时自动同步（`SyncAgentStates`）
 
 ### Message
 
@@ -136,25 +154,34 @@ type Manager struct {
 ```
 1. 生成 agentID（时间戳格式）
 2. 确定 MCP Servers（用户指定 / 配置默认值）
+   ├── 桌面模式：自动追加 desktop MCP Server（v0.0.3）
+   └── 普通模式：使用用户指定或默认 MCP Servers
 3. 确定 LLM model（用户指定 / 配置默认值）
-4. 创建 workspace 目录：~/.seaturt/workspaces/<agentID>/
-5. 创建 .seaturt/ 子目录
-6. 生成 SYSTEM.md → workspace/.seaturt/SYSTEM.md
+4. 选择镜像（v0.0.3）
+   ├── desktop=true  → config.desktop.sandbox_image（默认 seaturt/sandbox-desktop:latest，基于 linuxserver/webtop:ubuntu-kde）
+   └── desktop=false → config.sandbox_image（默认 seaturt/sandbox:latest）
+5. 创建 workspace 目录：~/.seaturt/workspaces/<agentID>/
+6. 创建 .seaturt/ 子目录
+7. 生成 SYSTEM.md → workspace/.seaturt/SYSTEM.md
    ├── 静态部分：身份、行为准则、工作目录、端口说明
    ├── 动态部分：桌面指令（desktop=true 时）、MCP Server 列表
    └── 可选：用户自定义附加指令（system_prompt 字段）
-7. docker.CreateContainer
-   ├── 镜像：config.sandbox_image
+8. docker.CreateContainer
+   ├── 镜像：根据 desktop 标志自动选择
    ├── 环境变量：HOST_UID, HOST_GID, 用户自定义 EnvVars
+   │   └── 桌面模式使用 PUID/PGID（LinuxServer 用户权限映射）+ TZ（时区）
    ├── 挂载：workspacePath → /workspace（+ ExtraMounts）
+   ├── 端口映射：20 个常用端口统一预映射到 127.0.0.1 随机端口
+   ├── ShmSize：桌面模式 2GB，普通模式默认
    ├── Label：seaturt.agent_id, seaturt.managed
    └── 容器名：seaturt-<agentID>
-8. docker.StartContainer
-9. 查询实际端口映射（ContainerInspect）
-10. 生成 PORTS.md → workspace/.seaturt/PORTS.md
-11. mcp.Pool.Connect — 为每个 MCP Server 创建 docker exec 会话
-12. mcp.NewRouter — 建立 tool_name → MCP Client 路由表
-13. store.CreateAgent — 持久化到 SQLite
+9. docker.StartContainer
+10. 查询实际端口映射（ContainerInspect）
+    └── 桌面模式：填充 KasmVNCPort/KasmVNCURL（端口 3000）
+11. 生成 PORTS.md → workspace/.seaturt/PORTS.md
+12. mcp.Pool.Connect — 为每个 MCP Server 创建 docker exec 会话
+13. mcp.NewRouter — 建立 tool_name → MCP Client 路由表
+14. store.CreateAgent — 持久化到 SQLite
 ```
 
 ### Start（启动已停止的 Agent）
@@ -441,6 +468,7 @@ SQLite 不适合存大量 base64 数据。消息持久化时：
 | `GET` | `/api/agents/:id/ports` | 查询端口映射表 |
 | `GET` | `/api/agents/:id/system-prompt` | 获取当前 SYSTEM.md 内容 |
 | `PUT` | `/api/agents/:id/system-prompt` | 更新 SYSTEM.md（热更新，下次 Chat 生效） |
+| `GET` | `/api/agents/:id/desktop` | 查询桌面状态和 VNC 访问信息（v0.0.3） |
 
 ### 对话
 
@@ -497,7 +525,7 @@ data: {}
 | `internal/agent/loop.go` | ~250 | Agent Loop（LLM ⟷ Tool 自主循环），LoopConfig 含 SystemPrompt 字段 |
 | `internal/agent/systemprompt.go` | ~120 | GenerateSystemMD() + GeneratePortsMD() + 模板常量 |
 | `internal/agent/loop_test.go` | 96 | Loop 单元测试 |
-| `internal/api/agent_handler.go` | ~140 | Agent CRUD API + ports + system-prompt 端点 |
+| `internal/api/agent_handler.go` | ~225 | Agent CRUD API + ports + system-prompt + desktop 端点 |
 | `internal/api/chat_handler.go` | ~310 | Chat SSE + 历史 + 图片上传（含 MIME 类型自动检测） |
 | `internal/api/router.go` | ~95 | Gin 路由注册 + 中间件 |
 | `internal/llm/client.go` | 328 | LLM HTTP 调用 + SSE 流式解析 |
@@ -524,6 +552,4 @@ data: {}
 | 图片不截断 | 透传 | 截屏等图片需要完整传给 LLM |
 | 图片外部化存储 | 文件系统 | SQLite 不适合存大 base64 |
 | MCP 通信 | docker exec stdio | 不暴露端口、跨平台、天然隔离 |
-| LLM 流式 | SSE + 回调 | 实时推送到客户端，体验好 |
-| 多 Provider | ContentFormatter 接口 | 同一套内部模型，适配不同 API 格式 |
-| 工具路由 | name → Client map | 多 MCP Server 的工具统一寻址 |
+| LLM 流式 |

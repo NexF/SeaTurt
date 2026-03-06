@@ -1,0 +1,155 @@
+import { Agent, ModelsResponse, Message, FileEntry, DesktopInfo, ContentBlock } from "@/types"
+
+const BASE = "/api"
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, options)
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(body.error || res.statusText)
+  }
+  return res.json()
+}
+
+// Models
+export async function fetchModels(): Promise<ModelsResponse> {
+  return request<ModelsResponse>("/models")
+}
+
+// Agents
+export async function listAgents(): Promise<Agent[]> {
+  return request<Agent[]>("/agents")
+}
+
+export async function createAgent(body: {
+  name: string
+  model?: string
+}): Promise<Agent> {
+  return request<Agent>("/agents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function getAgent(id: string): Promise<Agent> {
+  return request<Agent>(`/agents/${id}`)
+}
+
+export async function startAgent(id: string): Promise<void> {
+  await request(`/agents/${id}/start`, { method: "POST" })
+}
+
+export async function stopAgent(id: string): Promise<void> {
+  await request(`/agents/${id}/stop`, { method: "POST" })
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  await request(`/agents/${id}`, { method: "DELETE" })
+}
+
+// Chat
+export async function getHistory(agentId: string): Promise<Message[]> {
+  return request<Message[]>(`/agents/${agentId}/history`)
+}
+
+export async function deleteHistory(agentId: string): Promise<void> {
+  await request(`/agents/${agentId}/history`, { method: "DELETE" })
+}
+
+export interface ChatPayload {
+  text: string
+  images?: File[]
+}
+
+export function streamChat(
+  agentId: string,
+  payload: ChatPayload,
+  onEvent: (event: { type: string; data: unknown }) => void,
+  onDone: () => void,
+  onError: (err: Error) => void
+): AbortController {
+  const controller = new AbortController()
+
+  const doFetch = async () => {
+    let body: BodyInit
+    let headers: Record<string, string> = {}
+
+    if (payload.images && payload.images.length > 0) {
+      // multipart
+      const formData = new FormData()
+      formData.append("text", payload.text)
+      payload.images.forEach((img) => formData.append("image", img))
+      body = formData
+    } else {
+      // JSON
+      const content: ContentBlock[] = [{ type: "text", text: payload.text }]
+      headers["Content-Type"] = "application/json"
+      body = JSON.stringify({ content })
+    }
+
+    const res = await fetch(`${BASE}/agents/${agentId}/chat`, {
+      method: "POST",
+      headers,
+      body,
+      signal: controller.signal,
+    })
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(errBody.error || res.statusText)
+    }
+
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error("No response body")
+
+    const decoder = new TextDecoder()
+    let buffer = ""
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split("\n")
+      buffer = lines.pop() || ""
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (trimmed.startsWith("data: ")) {
+          const jsonStr = trimmed.slice(6)
+          const parsed = JSON.parse(jsonStr)
+          onEvent(parsed)
+        }
+      }
+    }
+
+    onDone()
+  }
+
+  doFetch().catch((err) => {
+    if (err.name !== "AbortError") {
+      onError(err)
+    }
+  })
+
+  return controller
+}
+
+// Files
+export async function listFiles(
+  agentId: string,
+  path?: string
+): Promise<{ files: FileEntry[] }> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : ""
+  return request(`/agents/${agentId}/files${query}`)
+}
+
+export async function getFileUrl(agentId: string, filepath: string): string {
+  return `${BASE}/agents/${agentId}/files/${filepath}`
+}
+
+// Desktop
+export async function getDesktop(agentId: string): Promise<DesktopInfo> {
+  return request<DesktopInfo>(`/agents/${agentId}/desktop`)
+}

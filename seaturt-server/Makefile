@@ -1,4 +1,4 @@
-.PHONY: build run clean test test-integration test-e2e build-test-image
+.PHONY: build run clean test test-integration test-e2e build-test-image build-image
 
 BINARY_NAME=containeragent-server
 BUILD_DIR=bin
@@ -25,7 +25,7 @@ build-test-image:
 	docker build -t containeragent/sandbox:test ./docker/sandbox/
 
 build-image:
-	docker build -t containeragent/sandbox:latest ./docker/sandbox/
+	docker build -t seaturt/sandbox:latest ./docker/sandbox/
 
 tidy:
 	go mod tidy

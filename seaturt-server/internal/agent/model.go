@@ -25,7 +25,6 @@ type AgentConfig struct {
 	MCPServers  []MCPServerConfig `json:"mcp_servers"`
 	ExtraMounts []string          `json:"extra_mounts,omitempty"`
 	EnvVars     map[string]string `json:"env_vars,omitempty"`
-	Desktop     bool              `json:"desktop,omitempty"`
 }
 
 type Agent struct {
@@ -36,6 +35,8 @@ type Agent struct {
 	Image         string      `json:"image"`
 	WorkspacePath string      `json:"workspace_path"`
 	Config        AgentConfig `json:"config"`
+	KasmVNCPort   string      `json:"kasmvnc_port,omitempty"`
+	KasmVNCURL    string      `json:"kasmvnc_url,omitempty"`
 	CreatedAt     time.Time   `json:"created_at"`
 	UpdatedAt     time.Time   `json:"updated_at"`
 }

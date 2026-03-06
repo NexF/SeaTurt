@@ -44,6 +44,10 @@ SeaTurt 小海龟是一个类似 OpenClaw 的智能助手平台，核心理念�
 │  ││MCP: db  ││ ││MCP: web ││ │           │                 │
 │  ││ query   ││ ││ browse  ││ │ (仅 core) │                 │
 │  │└─────────┘│ │└─────────┘│ │           │                 │
+│  │           │ │┌─────────┐│ │           │                 │
+│  │           │ ││MCP: desk││ │           │                 │
+│  │           │ ││ screensht│ │           │                 │
+│  │           │ │└─────────┘│ │           │                 │
 │  │/workspace │ │/workspace │ │/workspace │                 │
 │  │  ↕ mount  │ │  ↕ mount  │ │  ↕ mount  │                 │
 │  └────┬──────┘ └────┬──────┘ └────┬──────┘                 │
@@ -140,6 +144,47 @@ models:
 ### MCP 多模态
 
 MCP `ToolContent` 扩展支持 `image` 类型。`file_read` 读取二进制图片文件时返回 `{"type":"image","data":"base64...","mimeType":"image/png"}`，Agent Loop 自动转为 `ContentBlock` 传给 LLM。
+
+## 桌面环境（v0.0.3）
+
+### 概述
+
+桌面模式为 Agent 容器提供完整的 KDE Plasma 桌面环境，通过 KasmVNC 提供高质量的 Web 远程访问，使 Agent 具备 GUI 操作能力（截屏、鼠标点击、键盘输入、窗口管理等）。
+
+### 双镜像策略
+
+| 镜像 | 大小 | 基础镜像 | 内容 | 使用场景 |
+|------|------|---------|------|---------|
+| `seaturt/sandbox:latest` | ~300MB | `ubuntu:22.04` | 基础工具 + mcp-server-core | 普通 Agent（默认） |
+| `seaturt/sandbox-desktop:latest` | ~3GB | `lscr.io/linuxserver/webtop:ubuntu-kde` | KDE Plasma + KasmVNC + 开发工具 + mcp-server-core/desktop | 桌面 Agent |
+
+通过 `desktop: true` 创建 Agent 时自动选择桌面镜像。
+
+### 桌面容器进程模型
+
+```
+桌面容器启动后（由 s6-overlay 管理）：
+
+PID 1: /init (s6-overlay)
+       ├── KasmVNC Server      — VNC + Web Server (端口 3000/3001)
+       ├── KWin (X11)          — KDE 窗口管理器
+       ├── Plasmashell          — KDE 桌面面板
+       ├── PulseAudio           — 音频服务
+       └── (其他 KDE 服务)
+
+docker exec 建立 MCP 连接后：
+PID X: mcp-server-core     — 基础 tool（shell, file）
+PID Y: mcp-server-desktop  — 桌面 tool（screenshot, mouse, keyboard）
+```
+
+### 桌面模式自动配置
+
+创建 `desktop: true` Agent 时，Manager 自动执行：
+1. 追加 `mcp-server-desktop` 到 MCP Server 列表
+2. 选择 `seaturt/sandbox-desktop:latest` 镜像
+3. 注入环境变量 `PUID`/`PGID`（LinuxServer 用户权限映射）、`TZ`（时区）
+4. 设置 ShmSize 为 2GB（浏览器渲染需要）
+5. 启动后查询端口映射，填充 KasmVNC 访问信息（端口 3000/3001）
 
 ## 技术选型
 

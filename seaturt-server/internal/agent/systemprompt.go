@@ -8,7 +8,6 @@ import (
 
 // SystemPromptConfig holds the configuration for generating SYSTEM.md.
 type SystemPromptConfig struct {
-	Desktop    bool              // whether desktop mode is enabled
 	MCPServers []MCPServerConfig // configured MCP servers
 	EnvVars    map[string]string // custom environment variables
 	ExtraRules string            // user-defined extra rules (optional)
@@ -36,13 +35,13 @@ const systemPromptBase = `# Agent 系统指令
 
 const systemPromptDesktop = `
 ## 桌面环境
-本容器已启用 GNOME 桌面环境。你可以使用以下工具操作桌面：
+本容器已启用 KDE Plasma 桌面环境，通过 KasmVNC 提供浏览器内远程桌面访问。你可以使用以下工具操作桌面：
 - ` + "`screenshot`" + ` — 截取桌面截图
 - ` + "`mouse_click`" + ` / ` + "`mouse_move`" + ` — 鼠标操作
 - ` + "`keyboard_type`" + ` / ` + "`keyboard_key`" + ` — 键盘操作
 - ` + "`open_app`" + ` — 打开应用程序（如 firefox、terminal）
 
-桌面通过 VNC 和 noVNC 提供远程访问。
+桌面通过 KasmVNC 提供远程访问（端口 3000/3001）。
 `
 
 // GenerateSystemMD generates the content for SYSTEM.md based on the given config.
@@ -50,9 +49,8 @@ func GenerateSystemMD(cfg SystemPromptConfig) string {
 	var buf strings.Builder
 	buf.WriteString(systemPromptBase)
 
-	if cfg.Desktop {
-		buf.WriteString(systemPromptDesktop)
-	}
+	// Desktop section always included (unified desktop image)
+	buf.WriteString(systemPromptDesktop)
 
 	// MCP Server list
 	if len(cfg.MCPServers) > 0 {
@@ -77,15 +75,13 @@ var portDescriptions = map[int]string{
 	22:    "SSH",
 	80:    "HTTP",
 	443:   "HTTPS",
-	3000:  "前端开发 (React/Next.js)",
-	3001:  "前端开发 (备用)",
+	3000:  "KasmVNC (桌面 Web 访问)",
+	3001:  "KasmVNC (HTTPS)",
 	3306:  "MySQL",
 	4000:  "通用开发",
 	5173:  "Vite",
 	5174:  "Vite (备用)",
 	5432:  "PostgreSQL",
-	5900:  "VNC",
-	6080:  "noVNC",
 	6379:  "Redis",
 	8000:  "后端开发 (Python/uvicorn)",
 	8001:  "后端开发 (备用)",

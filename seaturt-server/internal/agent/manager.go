@@ -60,8 +60,17 @@ type CreateAgentRequest struct {
 	MCPServers   []MCPServerConfig `json:"mcp_servers,omitempty"`
 	ExtraMounts  []string          `json:"extra_mounts,omitempty"`
 	EnvVars      map[string]string `json:"env_vars,omitempty"`
-	SystemPrompt string            `json:"system_prompt,omitempty"` // user-defined extra system prompt
-	Desktop      bool              `json:"desktop,omitempty"`       // enable desktop mode
+	SystemPrompt string            `json:"system_prompt,omitempty"`
+}
+
+// hasMCPServer checks if a named MCP server exists in the list.
+func hasMCPServer(servers []MCPServerConfig, name string) bool {
+	for _, s := range servers {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Create creates a new agent: persists to DB, creates container, starts it, establishes MCP connections.
@@ -77,11 +86,19 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		}
 	}
 
+	// Always include desktop MCP server (unified desktop image)
+	if !hasMCPServer(mcpServers, "desktop") {
+		mcpServers = append(mcpServers, MCPServerConfig{Name: "desktop", Command: "mcp-server-desktop"})
+	}
+
 	// Determine model
 	model := req.Model
 	if model == "" {
 		model = m.cfg.DefaultModel
 	}
+
+	// Unified image (no more desktop/non-desktop distinction)
+	agentImage := m.cfg.SandboxImage
 
 	// Workspace path
 	workspacePath := filepath.Join(m.cfg.WorkspaceRoot, agentID)
@@ -95,9 +112,8 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		return nil, fmt.Errorf("create .seaturt dir: %w", err)
 	}
 
-	// Generate and write SYSTEM.md (before container creation — no port dependency)
+	// Generate and write SYSTEM.md
 	systemMD := GenerateSystemMD(SystemPromptConfig{
-		Desktop:    req.Desktop,
 		MCPServers: mcpServers,
 		EnvVars:    req.EnvVars,
 		ExtraRules: req.SystemPrompt,
@@ -110,26 +126,29 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		ID:            agentID,
 		Name:          req.Name,
 		Status:        StatusCreated,
-		Image:         m.cfg.SandboxImage,
+		Image:         agentImage,
 		WorkspacePath: workspacePath,
 		Config: AgentConfig{
 			Model:       model,
 			MCPServers:  mcpServers,
 			ExtraMounts: req.ExtraMounts,
 			EnvVars:     req.EnvVars,
-			Desktop:     req.Desktop,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
+	// ShmSize always set (browser rendering needs it)
+	shmSize := m.cfg.Container.ShmSize
+
 	// Create container
 	containerID, err := m.docker.CreateContainer(ctx, container.CreateContainerOpts{
 		AgentID:       agentID,
-		Image:         ag.Image,
+		Image:         agentImage,
 		WorkspacePath: workspacePath,
 		ExtraMounts:   req.ExtraMounts,
 		EnvVars:       req.EnvVars,
+		ShmSize:       shmSize,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
@@ -142,7 +161,7 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		return nil, fmt.Errorf("start container: %w", err)
 	}
 
-	// Query actual port mappings and generate PORTS.md (after container start)
+	// Query actual port mappings and generate PORTS.md
 	portMap, err := m.docker.GetMappedPorts(ctx, containerID)
 	if err != nil {
 		slog.Warn("failed to get mapped ports", "err", err)
@@ -150,6 +169,11 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		portsMD := GeneratePortsMD(portMap)
 		if err := os.WriteFile(filepath.Join(seaturtDir, "PORTS.md"), []byte(portsMD), 0644); err != nil {
 			slog.Warn("failed to write PORTS.md", "err", err)
+		}
+		// KasmVNC port (always available — unified desktop image)
+		if hp, ok := portMap["3000"]; ok {
+			ag.KasmVNCPort = hp
+			ag.KasmVNCURL = fmt.Sprintf("http://localhost:%s", hp)
 		}
 	}
 
@@ -193,10 +217,85 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		"container", containerID[:12],
 		"mcp_servers", len(mcpServers),
 		"tools", len(router.AllTools()),
-		"desktop", req.Desktop,
+		"image", agentImage,
 	)
 
 	return ag, nil
+}
+
+// SyncAgentStates reconciles DB agent states with actual Docker container states.
+// Should be called once at startup. The logic mirrors Docker semantics:
+//   - Container running  → Agent running (re-establish MCP)
+//   - Container stopped  → Agent stopped
+//   - Container removed  → Delete Agent from DB
+func (m *Manager) SyncAgentStates(ctx context.Context) {
+	agents, err := m.store.ListAgents()
+	if err != nil {
+		slog.Error("sync agent states: failed to list agents", "err", err)
+		return
+	}
+
+	for _, ag := range agents {
+		if ag.ContainerID == "" {
+			// No container — orphan record, clean up
+			slog.Warn("agent has no container, deleting",
+				"id", ag.ID, "name", ag.Name)
+			_ = m.store.DeleteMessages(ag.ID)
+			_ = m.store.DeleteAgent(ag.ID)
+			continue
+		}
+
+		cs, err := m.docker.InspectContainer(ctx, ag.ContainerID)
+		if err != nil {
+			// Container doesn't exist (docker rm) → delete agent
+			slog.Warn("agent container removed, deleting agent",
+				"id", ag.ID, "name", ag.Name, "container_id", ag.ContainerID[:12])
+			_ = m.store.DeleteMessages(ag.ID)
+			_ = m.store.DeleteAgent(ag.ID)
+			continue
+		}
+
+		if !cs.Running {
+			// Container exists but stopped
+			if ag.Status != StatusStopped {
+				slog.Info("agent container stopped, syncing status",
+					"id", ag.ID, "name", ag.Name, "container_status", cs.Status)
+				_ = m.store.UpdateAgentStatus(ag.ID, StatusStopped)
+			}
+			continue
+		}
+
+		// Container is running — re-establish MCP connections
+		if ag.Status != StatusRunning {
+			_ = m.store.UpdateAgentStatus(ag.ID, StatusRunning)
+		}
+
+		pool := mcp.NewPool()
+		var serverDefs []mcp.MCPServerDef
+		for _, s := range ag.Config.MCPServers {
+			serverDefs = append(serverDefs, mcp.MCPServerDef{Name: s.Name, Command: s.Command})
+		}
+
+		if err := pool.Connect(ctx, m.docker, ag.ContainerID, serverDefs); err != nil {
+			slog.Warn("agent container running but MCP reconnect failed, marking error",
+				"id", ag.ID, "name", ag.Name, "err", err)
+			pool.CloseAll()
+			_ = m.store.UpdateAgentStatus(ag.ID, StatusError)
+			continue
+		}
+
+		router := mcp.NewRouter(pool)
+
+		m.mu.Lock()
+		m.pools[ag.ID] = pool
+		m.routers[ag.ID] = router
+		m.mu.Unlock()
+
+		slog.Info("agent state synced, reconnected",
+			"id", ag.ID, "name", ag.Name,
+			"tools", len(router.AllTools()),
+		)
+	}
 }
 
 // Get returns an agent by ID.
@@ -241,7 +340,6 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 			slog.Warn("failed to write PORTS.md on start", "err", err)
 		}
 	}
-
 	// Re-establish MCP connections
 	pool := mcp.NewPool()
 	var serverDefs []mcp.MCPServerDef

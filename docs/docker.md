@@ -4,7 +4,7 @@
 
 SeaTurt 为每个 Agent 创建独立的 Docker 容器作为沙箱环境。本文档详细说明容器的网络模型、通信机制、端口管理、镜像策略及生命周期管理。
 
-## 当前架构（v0.0.1 ~ v0.0.2）
+## 当前架构（v0.0.1 ~ v0.0.3）
 
 ### 网络模式
 
@@ -330,24 +330,45 @@ Agent 或用户可通过 API 查询某个 Agent 的端口映射表，知道容�
 | MCP 协议 | docker exec stdio | 不走网络，双向字节流 |
 | 其他所有服务 | 统一端口映射 | VNC/HTTP/WS/SSH/DB 全覆盖 |
 
-## v0.0.3 改造：桌面容器
+## v0.0.3 改造：桌面容器（已实现）
 
 ### 双镜像策略
 
 v0.0.3 引入桌面环境后，维护两个镜像变体：
 
-| 镜像 | 大小 | 内容 | 使用场景 |
-|------|------|------|---------|
-| `seaturt/sandbox:latest` | ~300MB | 基础工具 + mcp-server-core | 普通 Agent |
-| `seaturt/sandbox-desktop:latest` | ~2GB | 基础 + GNOME + VNC + noVNC + Firefox + mcp-server-desktop | 桌面 Agent |
+| 镜像 | 大小 | 基础镜像 | 内容 | 使用场景 |
+|------|------|---------|------|---------|
+| `seaturt/sandbox:latest` | ~300MB | `ubuntu:22.04` | 基础工具 + mcp-server-core | 普通 Agent |
+| `seaturt/sandbox-desktop:latest` | ~3GB | `lscr.io/linuxserver/webtop:ubuntu-kde` | KDE Plasma + KasmVNC + 开发工具 + mcp-server-core/desktop | 桌面 Agent |
 
 通过 `agent.config.desktop: true/false` 自动选择镜像。
+
+### 桌面方案：LinuxServer Webtop (KDE + KasmVNC)
+
+桌面镜像基于 [LinuxServer Webtop](https://github.com/linuxserver/docker-webtop) 构建，提供完整的 KDE Plasma 桌面环境和 KasmVNC 远程访问方案。
+
+**为什么不用 GNOME？** GNOME Shell 42+（Ubuntu 22.04）的 Mutter 合成器需要 EGL/GPU 支持，在 Xvnc 环境下直接报 `Unsupported session type`，无法在标准 Docker 容器中运行。KDE Plasma 使用 KWin (X11) 作为窗口管理器，支持 Mesa 软件渲染（llvmpipe），可在无 GPU 的容器中正常工作。
+
+**为什么用 LinuxServer Webtop 而非自建 VNC 栈？** LinuxServer Webtop 集成了 KasmVNC，比 TigerVNC + noVNC 体验优秀很多：
+
+| | 自建方案 (TigerVNC + noVNC) | LinuxServer Webtop (KasmVNC) |
+|---|---|---|
+| 画面质量 | 一般，帧率低 | 高清流畅，自适应编码 |
+| 输入体验 | 基础键鼠 | 剪贴板同步、文件上传、音频支持 |
+| Web UI | 老旧的 noVNC 界面 | 现代化 Web UI |
+| 分辨率 | 固定分辨率 | 自动适配浏览器窗口 |
+| 进程管理 | 手动脚本管理 | s6-overlay 自动管理 |
 
 ### 端口映射
 
 v0.0.3 起，所有容器（包括桌面和普通）统一使用预映射方案，详见上文「采用方案：统一端口映射」。
 
-VNC/noVNC 所需的 5900/6080 已包含在统一端口列表中，无需桌面容器额外处理。
+桌面容器使用 KasmVNC 的 3000/3001 端口（已包含在统一端口列表中）：
+
+| 容器端口 | 协议 | 用途 |
+|---------|------|------|
+| 3000 | HTTP | KasmVNC Web 访问 |
+| 3001 | HTTPS | KasmVNC Web 访问（加密） |
 
 桌面容器的额外配置仅为 ShmSize：
 
@@ -357,29 +378,29 @@ if opts.Desktop {
 }
 ```
 
-### 环境变量扩展
+### 环境变量
 
-桌面模式时额外注入：
+桌面模式基于 LinuxServer Webtop，使用 `PUID`/`PGID` 管理用户权限：
 
 | 变量 | 值 | 用途 |
 |------|---|------|
-| `DESKTOP_ENABLED` | `true` | entrypoint 据此启动桌面服务 |
-| `RESOLUTION` | `1920x1080x24` | Xvfb 虚拟显示分辨率 |
-| `DISPLAY` | `:99` | X11 显示编号 |
+| `PUID` | 宿主机 UID | LinuxServer 用户权限映射 |
+| `PGID` | 宿主机 GID | LinuxServer 用户组权限映射 |
+| `TZ` | `Asia/Shanghai` | 容器时区 |
+
+> 注意：桌面镜像不使用自定义 `entrypoint.sh`，而是使用 LinuxServer 基础镜像的 `/init`（s6-overlay）作为 ENTRYPOINT，通过 `PUID`/`PGID` 环境变量管理用户权限。`DESKTOP_ENABLED`、`DISPLAY`、`RESOLUTION` 等环境变量不再需要，桌面环境由基础镜像自动启动。
 
 ### 容器内进程模型
 
 ```
-桌面容器启动后：
+桌面容器启动后（由 s6-overlay 管理）：
 
-PID 1: entrypoint.sh → gosu agent tail -f /dev/null
-       ├── start-desktop.sh（后台）
-       │   ├── Xvfb :99           — 虚拟显示服务
-       │   ├── gnome-session      — GNOME 桌面
-       │   ├── x0vncserver :5900  — VNC Server
-       │   └── websockify :6080   — noVNC WebSocket 代理
-       │
-       └── (等待 docker exec)
+PID 1: /init (s6-overlay)
+       ├── KasmVNC Server      — VNC + Web Server (端口 3000/3001)
+       ├── KWin (X11)          — KDE 窗口管理器
+       ├── Plasmashell          — KDE 桌面面板
+       ├── PulseAudio           — 音频服务
+       └── (其他 KDE 服务)
 
 docker exec 建立 MCP 连接后：
 PID X: mcp-server-core     — 基础 tool（shell, file）
@@ -402,14 +423,16 @@ hostCfg.ShmSize = 2 * 1024 * 1024 * 1024
 
 | 路径 | 说明 |
 |------|------|
-| `internal/container/docker.go` | Docker SDK 封装：容器 CRUD、exec、镜像管理 |
-| `internal/agent/manager.go` | Agent 生命周期：协调容器、MCP、存储 |
-| `docker/sandbox/Dockerfile` | 基础沙箱镜像构建 |
-| `docker/sandbox/entrypoint.sh` | 容器入口：UID/GID 匹配 + 降权 |
+| `internal/container/docker.go` | Docker SDK 封装：容器 CRUD、exec、镜像管理、统一端口映射 |
+| `internal/agent/manager.go` | Agent 生命周期：协调容器、MCP、存储、桌面模式自动配置 |
+| `internal/config/config.go` | 配置加载，含 `DesktopConfig` 子结构 |
+| `docker/sandbox/Dockerfile` | 基础沙箱镜像构建（基于 ubuntu:22.04） |
+| `docker/sandbox/Dockerfile.desktop` | 桌面沙箱镜像构建（基于 linuxserver/webtop:ubuntu-kde，v0.0.3 新增） |
+| `docker/sandbox/entrypoint.sh` | 基础镜像入口：UID/GID 匹配 + 降权（桌面镜像不使用，由 s6-overlay /init 管理） |
+| `docker/sandbox/start-desktop.sh` | 已废弃——桌面启动由 LinuxServer 基础镜像的 s6-overlay 自动管理 |
 | `docker/sandbox/mcp-servers/core/` | mcp-server-core 源码 |
-| `docker/sandbox/start-desktop.sh` | 桌面启动脚本（v0.0.3 新增） |
 | `docker/sandbox/mcp-servers/desktop/` | mcp-server-desktop 源码（v0.0.3 新增） |
-| `config.yaml` | `docker_host`, `sandbox_image` 等配置 |
+| `config.yaml` | `docker_host`, `sandbox_image`, `desktop` 等配置 |
 
 ## 常见问题
 

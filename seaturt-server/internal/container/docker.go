@@ -15,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/docker/go-connections/nat"
 )
 
 const labelPrefix = "seaturt"
@@ -62,18 +63,17 @@ type CreateContainerOpts struct {
 	WorkspacePath string // host path to mount as /workspace
 	ExtraMounts   []string
 	EnvVars       map[string]string
-	Desktop       bool   // whether to enable desktop environment
-	Resolution    string // desktop resolution, e.g. "1920x1080x24"
-	ShmSize       int64  // /dev/shm size in bytes (0 = Docker default)
+	ShmSize       int64 // /dev/shm size in bytes (0 = Docker default)
 }
 
 // CreateContainer creates and starts a sandbox container for the given agent.
 // Returns the container ID.
 func (m *Manager) CreateContainer(ctx context.Context, opts CreateContainerOpts) (string, error) {
-	// Build env vars — inject host UID/GID for entrypoint user mapping
+	// Build env vars — inject PUID/PGID/TZ for LinuxServer base image
 	envList := []string{
-		fmt.Sprintf("HOST_UID=%d", os.Getuid()),
-		fmt.Sprintf("HOST_GID=%d", os.Getgid()),
+		fmt.Sprintf("PUID=%d", os.Getuid()),
+		fmt.Sprintf("PGID=%d", os.Getgid()),
+		"TZ=Asia/Shanghai",
 	}
 	for k, v := range opts.EnvVars {
 		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
@@ -85,19 +85,27 @@ func (m *Manager) CreateContainer(ctx context.Context, opts CreateContainerOpts)
 	}
 	binds = append(binds, opts.ExtraMounts...)
 
+	// Unified port mappings — 20 commonly used ports, all agents
+	portMappings := buildPortMappings()
+
 	containerCfg := &container.Config{
 		Image: opts.Image,
 		Labels: map[string]string{
 			labelPrefix + ".agent_id": opts.AgentID,
 			labelPrefix + ".managed": "true",
 		},
-		Env: envList,
+		Env:          envList,
+		ExposedPorts: portMappings.ExposedPorts,
 	}
 
 	hostCfg := &container.HostConfig{
-		Binds: binds,
-		// Security: read-only root filesystem with /workspace writable via bind mount
-		// ReadonlyRootfs is disabled for now — MCP servers may need /tmp etc.
+		Binds:        binds,
+		PortBindings: portMappings.PortBindings,
+	}
+
+	// Shared memory for Chrome/Firefox
+	if opts.ShmSize > 0 {
+		hostCfg.ShmSize = opts.ShmSize
 	}
 
 	name := fmt.Sprintf("seaturt-%s", opts.AgentID)
@@ -107,7 +115,8 @@ func (m *Manager) CreateContainer(ctx context.Context, opts CreateContainerOpts)
 		return "", fmt.Errorf("create container: %w", err)
 	}
 
-	slog.Info("container created", "container_id", resp.ID[:12], "agent_id", opts.AgentID)
+	slog.Info("container created", "container_id", resp.ID[:12], "agent_id", opts.AgentID,
+		"ports", len(portMappings.PortBindings))
 	return resp.ID, nil
 }
 
@@ -308,4 +317,41 @@ func (m *Manager) PullImage(ctx context.Context, ref string) error {
 	}
 	slog.Info("image pulled", "image", ref)
 	return nil
+}
+
+// portMappingsResult holds the exposed ports and host bindings for container creation.
+type portMappingsResult struct {
+	ExposedPorts nat.PortSet
+	PortBindings nat.PortMap
+}
+
+// commonPorts lists the 18 container ports that are pre-mapped for all agents.
+var commonPorts = []string{
+	"22", "80", "443",
+	"3000", "3001",
+	"3306", "4000",
+	"5173", "5174",
+	"5432", "6379",
+	"8000", "8001", "8080", "8081",
+	"8888", "9000", "27017",
+}
+
+// buildPortMappings creates the unified port mapping for all containers.
+// Each port is mapped to a Docker-assigned random host port on 127.0.0.1.
+func buildPortMappings() portMappingsResult {
+	exposed := make(nat.PortSet, len(commonPorts))
+	bindings := make(nat.PortMap, len(commonPorts))
+
+	for _, p := range commonPorts {
+		port := nat.Port(p + "/tcp")
+		exposed[port] = struct{}{}
+		bindings[port] = []nat.PortBinding{
+			{HostIP: "127.0.0.1", HostPort: ""},
+		}
+	}
+
+	return portMappingsResult{
+		ExposedPorts: exposed,
+		PortBindings: bindings,
+	}
 }

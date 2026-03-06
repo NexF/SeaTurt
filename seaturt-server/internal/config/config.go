@@ -35,17 +35,13 @@ type Config struct {
 	// 多模态配置
 	MaxImageSize int `yaml:"max_image_size" json:"max_image_size"` // bytes, default 20MB
 
-	// 桌面环境配置
-	Desktop DesktopConfig `yaml:"desktop" json:"desktop"`
+	// 容器配置
+	Container ContainerConfig `yaml:"container" json:"container"`
 }
 
-// DesktopConfig holds desktop environment configuration.
-type DesktopConfig struct {
-	Enabled      bool   `yaml:"enabled" json:"enabled"`
-	Resolution   string `yaml:"resolution" json:"resolution"`
-	VNCPassword  string `yaml:"vnc_password" json:"vnc_password"`
-	ShmSize      int64  `yaml:"shm_size" json:"shm_size"`
-	SandboxImage string `yaml:"sandbox_image" json:"sandbox_image"`
+// ContainerConfig holds container-level configuration.
+type ContainerConfig struct {
+	ShmSize int64 `yaml:"shm_size" json:"shm_size"` // /dev/shm size in bytes, default 2GB
 }
 
 // ProviderConfig describes an LLM provider (OpenAI-compatible).
@@ -191,12 +187,8 @@ func defaults() *Config {
 		},
 		CommandTimeout: 300,
 		MaxImageSize:   20 * 1024 * 1024, // 20MB
-		Desktop: DesktopConfig{
-			Enabled:      false,
-			Resolution:   "1920x1080x24",
-			VNCPassword:  "seaturt",
-			ShmSize:      2 * 1024 * 1024 * 1024, // 2GB
-			SandboxImage: "seaturt/sandbox-desktop:latest",
+		Container: ContainerConfig{
+			ShmSize: 2 * 1024 * 1024 * 1024, // 2GB
 		},
 	}
 }

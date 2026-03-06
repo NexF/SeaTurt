@@ -180,3 +180,68 @@ func (h *AgentHandler) UpdateSystemPrompt(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"status": "updated"})
 }
+
+// ModelItem represents a model entry in the API response for model listing.
+type ModelItem struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+}
+
+// ListModels handles GET /api/models — returns all available models for the frontend dropdown.
+func (h *AgentHandler) ListModels(c *gin.Context) {
+	cfg := h.mgr.GetConfig()
+	models := make([]ModelItem, 0)
+	for providerName, provider := range cfg.Providers {
+		for _, m := range provider.Models {
+			name := m.Name
+			if name == "" {
+				name = m.ID
+			}
+			models = append(models, ModelItem{
+				ID:       m.ID,
+				Name:     name,
+				Provider: providerName,
+			})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"models":         models,
+		"default_model":  cfg.DefaultModel,
+	})
+}
+
+// DesktopInfo represents the desktop status in the API response.
+type DesktopInfo struct {
+	KasmVNCPort string `json:"kasmvnc_port,omitempty"`
+	KasmVNCURL  string `json:"kasmvnc_url,omitempty"`
+	Status      string `json:"status"`
+}
+
+// GetDesktop handles GET /api/agents/:id/desktop — returns desktop status and KasmVNC URLs.
+func (h *AgentHandler) GetDesktop(c *gin.Context) {
+	id := c.Param("id")
+
+	ag, err := h.mgr.Get(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
+	}
+
+	info := DesktopInfo{
+		Status: string(ag.Status),
+	}
+
+	if ag.Status == agent.StatusRunning {
+		// Query live port mappings
+		portMap, err := h.mgr.GetMappedPorts(c.Request.Context(), ag)
+		if err == nil {
+			if hp, ok := portMap["3000"]; ok {
+				info.KasmVNCPort = hp
+				info.KasmVNCURL = "http://localhost:" + hp
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, info)
+}

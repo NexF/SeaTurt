@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -63,6 +64,9 @@ func main() {
 
 	// 初始化 Agent Manager
 	agentMgr := agent.NewManager(cfg, db, dockerMgr, llmClient)
+
+	// 启动时同步 Agent 状态与 Docker 容器实际状态
+	agentMgr.SyncAgentStates(context.Background())
 
 	// 初始化 HTTP Server
 	server := api.NewServer(cfg.ServerPort, agentMgr, cfg.MaxImageSize)

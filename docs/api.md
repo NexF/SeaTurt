@@ -1,5 +1,11 @@
 # API 参考
 
+## 模型
+
+```
+GET    /api/models                  # 获取可选模型列表（v0.1.0）
+```
+
 ## Agent 管理
 
 ```
@@ -12,6 +18,7 @@ DELETE /api/agents/:id              # 删除 Agent
 GET    /api/agents/:id/ports        # 查询端口映射表（v0.0.4）
 GET    /api/agents/:id/system-prompt   # 获取当前 SYSTEM.md 内容（v0.0.4）
 PUT    /api/agents/:id/system-prompt   # 更新 SYSTEM.md（v0.0.4）
+GET    /api/agents/:id/desktop      # 查询桌面状态和 VNC 访问信息（v0.0.3）
 ```
 
 ## 对话交互
@@ -39,21 +46,44 @@ WS     /api/agents/:id/ws          # 实时对话 + 容器输出流
 
 ## 数据模型
 
+### Model（v0.1.0）
+
+`GET /api/models` 返回所有可选模型列表，供前端创建 Agent 时下拉选择。
+
+```json
+{
+  "models": [
+    {
+      "id": "auto",
+      "name": "auto",
+      "provider": "gongfeng"
+    },
+    {
+      "id": "gpt-4o",
+      "name": "GPT-4o",
+      "provider": "openai"
+    }
+  ],
+  "default_model": "auto"
+}
+```
+
+前端显示 `name`，创建 Agent 时传递 `id`。
+
 ### Agent
 
 ```json
 {
   "id": "agent_abc123",
-  "name": "my-coding-assistant",
+  "name": "我的编程助手",
   "status": "running",           // created | running | stopped | error
   "container_id": "docker_xyz",
   "image": "seaturt/sandbox:latest",
   "workspace_path": "/home/user/.seaturt/workspaces/agent_abc123",
   "config": {
-    "model": "claude-sonnet-4-20250514",
+    "model": "auto",
     "mcp_servers": [
-      { "name": "core", "command": "mcp-server-core" },
-      { "name": "browser", "command": "mcp-server-browser" }
+      { "name": "core", "command": "mcp-server-core" }
     ],
     "extra_mounts": [],
     "env_vars": {}
@@ -79,46 +109,43 @@ Chat 请求使用 `ContentBlock` 数组作为消息内容，支持多模态输�
 
 ## 使用示例
 
+### 获取可选模型列表（v0.1.0）
+
+```bash
+curl http://localhost:8080/api/models
+```
+
 ### 创建 Agent
 
 ```bash
-# 仅 core MCP Server
+# 最简创建（使用默认模型，自动挂载所有默认 MCP Servers）
 curl -X POST http://localhost:8080/api/agents \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "coder",
-    "config": {
-      "model": "claude-sonnet-4-20250514",
-      "mcp_servers": [
-        { "name": "core", "command": "mcp-server-core" }
-      ]
-    }
+    "name": "我的编程助手"
   }'
 
-# 带浏览器能力
+# 指定模型（model 传 id，可从 GET /api/models 获取）
 curl -X POST http://localhost:8080/api/agents \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "researcher",
-    "config": {
-      "model": "claude-sonnet-4-20250514",
-      "mcp_servers": [
-        { "name": "core", "command": "mcp-server-core" },
-        { "name": "browser", "command": "mcp-server-browser" }
-      ]
-    }
+    "name": "代码助手",
+    "model": "gpt-4o"
   }'
 
-# 自定义 system prompt + 桌面模式（v0.0.4）
+# 启用桌面模式
 curl -X POST http://localhost:8080/api/agents \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "fullstack-assistant",
-    "model": "gpt-4o",
-    "system_prompt": "你是一个全栈开发助手，擅长分析和解决问题。",
+    "name": "全栈助手",
+    "model": "auto",
     "desktop": true
   }'
 ```
+
+> 名称允许任意字符（中文、英文、符号均可），仅作展示用途，后端自动生成唯一 `agent_id`。
+> MCP Servers 默认挂载所有配置中的 `default_mcp_servers`，无需手动指定。
+> 桌面模式 Agent 使用 `seaturt/sandbox-desktop:latest` 镜像，自动添加 `mcp-server-desktop`，ShmSize 设为 2GB。
 
 ### 对话
 
@@ -203,4 +230,32 @@ curl -X DELETE http://localhost:8080/api/agents/agent_abc123
 
 # 列出所有
 curl http://localhost:8080/api/agents
+```
+
+### 桌面状态查询（v0.0.3）
+
+```bash
+# 查询桌面 Agent 的远程桌面访问信息
+curl http://localhost:8080/api/agents/agent_abc123/desktop
+```
+
+响应（桌面 Agent 运行中）：
+
+```json
+{
+  "desktop_enabled": true,
+  "kasmvnc_port": "32770",
+  "kasmvnc_url": "http://localhost:32770",
+  "resolution": "auto",
+  "status": "running"
+}
+```
+
+响应（非桌面 Agent）：
+
+```json
+{
+  "desktop_enabled": false,
+  "status": "running"
+}
 ```

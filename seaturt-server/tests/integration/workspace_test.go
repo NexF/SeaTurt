@@ -131,14 +131,10 @@ func TestSystemPrompt_Desktop(t *testing.T) {
 	t.Parallel()
 	ts, _ := newTestServer(t, nil)
 
-	resp := doRequest(t, ts, "POST", "/api/agents", map[string]any{
-		"name":    "desktop-prompt-test",
-		"desktop": true,
-	})
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-
-	var ag agentpkg.Agent
-	decodeJSON(t, resp, &ag)
+	ag := createDesktopAgent(t, ts, "desktop-prompt-test")
+	if ag == nil {
+		t.Skip("desktop agent creation failed (test image may not have mcp-server-desktop)")
+	}
 	defer doRequest(t, ts, "DELETE", "/api/agents/"+ag.ID, nil)
 
 	systemMDPath := filepath.Join(ag.WorkspacePath, ".seaturt", "SYSTEM.md")

@@ -21,6 +21,9 @@
 make build-test-image
 # 或手动
 docker build -t seaturt/sandbox:test -f docker/sandbox/Dockerfile docker/sandbox/
+
+# 构建桌面测试镜像（可选，桌面测试需要）
+make build-desktop-image
 ```
 
 ## 运行单元测试
@@ -108,6 +111,7 @@ tests/
 │   ├── api_test.go               # IT-10, IT-11
 │   ├── multimodal_test.go        # IT-12 ~ IT-22（多模态全链路测试）
 │   ├── workspace_test.go         # IT-39 ~ IT-48（Workspace 提示文件 + System Prompt 测试）
+│   ├── desktop_test.go           # IT-29 ~ IT-38（桌面环境 + VNC 测试，v0.0.3）
 │   └── mock_llm.go               # Mock LLM HTTP Server（支持多模态请求校验 + 请求捕获）
 ├── e2e/
 │   ├── setup_test.go             # TestMain、真实 LLM 初始化
@@ -158,6 +162,7 @@ defer mockServer.Close()
 | `newTestServer(t, responses)` | 创建完整 API Server 栈 |
 | `doRequest(t, ts, method, path, body)` | HTTP 请求快捷方法 |
 | `sendChat(t, ts, agentID, text)` | 发送 Chat 并消费完整 SSE 流 |
+| `createDesktopAgent(t, ts, name)` | 创建桌面 Agent，失败返回 nil（用于 t.Skip 模式） |
 
 ## 测试用例矩阵
 
@@ -209,6 +214,14 @@ defer mockServer.Close()
 | IT-46 | `TestSystemPrompt_Fallback` | 删除 SYSTEM.md → 使用 DefaultSystemPrompt |
 | IT-47 | `TestPortsMD_Regenerated` | Stop/Start 后 PORTS.md 重新生成 |
 | IT-48 | `TestPortsAPI` | `GET /api/agents/:id/ports` 返回正确映射 |
+| IT-29 | `TestDesktop_ContainerWithVNC` | 桌面容器启动 → VNC 端口可用 |
+| IT-30 | `TestDesktop_NoVNCWebAccess` | noVNC Web 端口 6080 映射 |
+| IT-31 | `TestDesktop_Screenshot` | 桌面模式自动添加 desktop MCP Server |
+| IT-36 | `TestDesktop_NonDesktopAgent` | 非桌面 Agent 不含 desktop MCP Server |
+| IT-37 | `TestDesktop_DynamicPorts` | 多 Agent 端口不冲突 |
+| IT-38 | `TestDesktop_DesktopAPI` | `GET /api/agents/:id/desktop` 返回正确信息 |
+
+> 桌面测试（IT-29/30/31/38/43）需要 `seaturt/sandbox-desktop:latest` 镜像。无镜像时自动 SKIP，通过 `createDesktopAgent()` 辅助函数优雅处理。
 
 ### E2E 测试（已实现）
 
@@ -230,6 +243,10 @@ defer mockServer.Close()
 | IT-14 | 命令超时 |
 | IT-16 | 多 Agent 并行 |
 | IT-17 | 大输出截断 |
+| IT-32 | `mouse_click` tool 执行成功（需桌面镜像） |
+| IT-33 | `keyboard_type` tool 输入文字（需桌面镜像） |
+| IT-34 | `open_app firefox` → 浏览器启动（需桌面镜像） |
+| IT-35 | 截屏 → LLM 多模态传递（需桌面镜像 + Mock LLM） |
 | E2E-06 | 多 MCP Server E2E |
 
 ## 编写新测试
@@ -294,3 +311,4 @@ jobs:
 | MCP 连接失败 | MCP Server 不在镜像中 | 检查镜像构建 |
 | Mock LLM "no more responses" | 响应序列不够 | 增加 MockLLMResponse 数量 |
 | SSE 解析失败 | 流式格式不匹配 | 检查 Content-Type 和 `data:` 前缀 |
+| 桌面测试全部 SKIP | 桌面镜像未构建 | `make build-desktop-image` |

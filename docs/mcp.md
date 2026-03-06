@@ -45,6 +45,41 @@
 | `mcp-server-browser` | 浏览器操作（基于 Playwright） | `browse_url`, `screenshot`, `click` 等 |
 | `mcp-server-db` | 数据库操作 | `db_query`, `db_schema` 等 |
 | `mcp-server-git` | Git 操作 | `git_status`, `git_commit`, `git_diff` 等 |
+| `mcp-server-desktop` | 桌面 GUI 操作（v0.0.3） | `screenshot`, `mouse_click`, `keyboard_type` 等 |
+
+## MCP Server：`mcp-server-desktop`（v0.0.3）
+
+桌面 Agent（`desktop: true`）自动启用，提供 GUI 桌面操作能力。依赖容器内的 Xvfb + GNOME 桌面环境。
+
+**仅在 `seaturt/sandbox-desktop:latest` 镜像中可用。**
+
+| Tool | 说明 | 参数 | 返回类型 |
+|------|------|------|---------|
+| `screenshot` | 桌面全屏截图 | `region?: {x, y, width, height}` | image (PNG base64) |
+| `mouse_click` | 模拟鼠标点击 | `x: int, y: int, button?: "left"\|"right"\|"middle"` | text |
+| `mouse_move` | 移动鼠标 | `x: int, y: int` | text |
+| `mouse_drag` | 鼠标拖拽 | `from_x, from_y, to_x, to_y: int` | text |
+| `keyboard_type` | 模拟键盘输入文字 | `text: string` | text |
+| `keyboard_key` | 模拟按键/组合键 | `key: string` (如 "Return", "ctrl+c") | text |
+| `window_list` | 列出桌面窗口 | 无 | text |
+| `window_focus` | 聚焦指定窗口 | `window_id?: string, title?: string` | text |
+| `open_app` | 打开应用程序 | `app: string` (如 "firefox", "gnome-terminal") | text |
+| `desktop_wait` | 等待渲染稳定后截屏 | `delay_ms?: int` (默认 1000，上限 10000) | image (PNG base64) |
+
+实现依赖：`xdotool`（鼠标/键盘）、`wmctrl`（窗口管理）、`import`（ImageMagick 截屏）。
+
+### 截屏与多模态联动
+
+`screenshot` / `desktop_wait` 返回 `image` 类型 ToolContent，通过 Agent Loop 的 `formatToolResult()` 自动转为 `llm.ContentBlock{Type:"image"}`，传给 LLM——**完全复用 v0.0.2 的多模态通道**。
+
+```
+Agent 调用 screenshot
+  → mcp-server-desktop 执行截屏（scrot/import）
+  → 返回 ToolContent{Type:"image", Data:"base64...", MimeType:"image/png"}
+  → Agent Loop formatToolResult() → ContentBlock{Type:"image"}
+  → LLM 接收图片，理解屏幕内容
+  → LLM 决定下一步操作（如 mouse_click 某个按钮）
+```
 
 ## MCP Server 清单
 
@@ -54,6 +89,7 @@
 | `mcp-server-browser` | `/usr/local/bin/mcp-server-browser` | 否 | 浏览器自动化 |
 | `mcp-server-db` | `/usr/local/bin/mcp-server-db` | 否 | 数据库操作 |
 | `mcp-server-git` | `/usr/local/bin/mcp-server-git` | 否 | Git 版本控制 |
+| `mcp-server-desktop` | `/usr/local/bin/mcp-server-desktop` | `desktop: true` 时自动启用 | 桌面 GUI 操作（v0.0.3） |
 
 每个 MCP Server 均为独立二进制，通过 stdio 通信。Server 端使用 `docker exec <container> <mcp-server-xxx>` 按需建立连接。
 

@@ -49,6 +49,9 @@ func newTestServer(t *testing.T, mockResponses []MockLLMResponse) (*httptest.Ser
 		DefaultMCPServers: []config.MCPServerConfig{
 			{Name: "core", Command: "mcp-server-core"},
 		},
+		Container: config.ContainerConfig{
+			ShmSize: 2 * 1024 * 1024 * 1024, // 2GB
+		},
 	}
 
 	agentMgr := agentpkg.NewManager(cfg, testStore, dockerMgr, llmClient)
@@ -303,6 +306,65 @@ func decodeJSON(t *testing.T, resp *http.Response, target any) {
 	t.Helper()
 	err := json.NewDecoder(resp.Body).Decode(target)
 	require.NoError(t, err)
+}
+
+// newTestServerWithProviders creates a test server with Providers configured (for testing GET /api/models).
+func newTestServerWithProviders(t *testing.T, mockResponses []MockLLMResponse) (*httptest.Server, *MockLLMServer) {
+	t.Helper()
+
+	tmpDB, err := os.CreateTemp("", "api-test-*.db")
+	require.NoError(t, err)
+	dbPath := tmpDB.Name()
+	tmpDB.Close()
+
+	wsRoot, err := os.MkdirTemp(testWorkspace, "api-ws-*")
+	require.NoError(t, err)
+
+	testStore, err := store.New(dbPath)
+	require.NoError(t, err)
+
+	mockLLM := NewMockLLMServer(mockResponses)
+	llmClient := mockLLM.NewClient()
+
+	cfg := &config.Config{
+		ServerPort:    0,
+		SandboxImage:  testImage,
+		WorkspaceRoot: wsRoot,
+		DefaultModel:  "test-model",
+		Providers: map[string]*config.ProviderConfig{
+			"test-provider": {
+				BaseURL: mockLLM.BaseURL(),
+				API:     "openai-completions",
+				APIKey:  "test-key",
+				Models: []config.ModelConfig{
+					{ID: "test-model", Name: "Test Model"},
+					{ID: "gpt-4o", Name: "GPT-4o"},
+					{ID: "claude-sonnet", Name: "Claude Sonnet"},
+				},
+			},
+		},
+		DefaultMCPServers: []config.MCPServerConfig{
+			{Name: "core", Command: "mcp-server-core"},
+		},
+	}
+
+	agentMgr := agentpkg.NewManager(cfg, testStore, dockerMgr, llmClient)
+	server := api.NewServer(0, agentMgr, 20*1024*1024)
+	ts := httptest.NewServer(getEngineFromServer(server))
+
+	t.Cleanup(func() {
+		ts.Close()
+		mockLLM.Close()
+		testStore.Close()
+		os.Remove(dbPath)
+		os.RemoveAll(wsRoot)
+		agents, _ := agentMgr.List()
+		for _, ag := range agents {
+			_ = agentMgr.Delete(context.Background(), ag.ID)
+		}
+	})
+
+	return ts, mockLLM
 }
 
 // getEngineFromServer extracts the underlying http.Handler from api.Server.

@@ -24,6 +24,8 @@
 
 ## 容器镜像设计
 
+### 基础镜像（`seaturt/sandbox:latest`）
+
 基础镜像预装：
 
 ```dockerfile
@@ -60,6 +62,27 @@ ENTRYPOINT ["/entrypoint.sh"]
 # 容器保持运行，MCP Server 由 docker exec 按需启动
 CMD ["tail", "-f", "/dev/null"]
 ```
+
+### 桌面镜像（`seaturt/sandbox-desktop:latest`，v0.0.3）
+
+基于 LinuxServer Webtop (KDE + KasmVNC) 构建，约 3GB：
+
+```
+golang:1.23-alpine (builder)
+    └── 编译 mcp-server-core + mcp-server-desktop
+
+lscr.io/linuxserver/webtop:ubuntu-kde (runtime)
+    ├── KDE Plasma 桌面 + KasmVNC（基础镜像自带）
+    ├── 开发工具：curl, wget, git, vim, python3, jq, ripgrep, build-essential
+    ├── mcp-server-core（Go 静态二进制）
+    ├── mcp-server-desktop（Go 静态二进制）
+    ├── xdotool + wmctrl + scrot + ImageMagick（桌面自动化工具）
+    ├── 中文字体 fonts-noto-cjk + emoji
+    ├── s6-overlay 进程管理（基础镜像自带，通过 PUID/PGID 管理用户权限）
+    └── EXPOSE 3000 3001（KasmVNC HTTP/HTTPS）
+```
+
+通过 `desktop: true` 创建 Agent 时自动使用此镜像。桌面环境由基础镜像的 s6-overlay 自动启动和管理，无需自定义 entrypoint 或启动脚本。
 
 ## 安全设计
 

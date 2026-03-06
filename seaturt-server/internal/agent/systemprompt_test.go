@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// IT-39: GenerateSystemMD produces valid content with base sections
+// IT-39: GenerateSystemMD produces valid content with base sections + desktop (always included)
 func TestGenerateSystemMD_Default(t *testing.T) {
 	t.Parallel()
 	cfg := SystemPromptConfig{
@@ -26,15 +26,17 @@ func TestGenerateSystemMD_Default(t *testing.T) {
 	assert.Contains(t, md, "## 端口使用")
 	assert.Contains(t, md, "## 可用工具")
 	assert.Contains(t, md, "- core")
-	assert.NotContains(t, md, "## 桌面环境")
+	// Desktop section always included (unified desktop image)
+	assert.Contains(t, md, "## 桌面环境")
+	assert.Contains(t, md, "screenshot")
+	assert.Contains(t, md, "KasmVNC")
 	assert.NotContains(t, md, "## 附加指令")
 }
 
-// IT-43: desktop: true includes desktop section
-func TestGenerateSystemMD_Desktop(t *testing.T) {
+// IT-43: desktop section always included with desktop MCP tools
+func TestGenerateSystemMD_DesktopAlwaysIncluded(t *testing.T) {
 	t.Parallel()
 	cfg := SystemPromptConfig{
-		Desktop: true,
 		MCPServers: []MCPServerConfig{
 			{Name: "core", Command: "mcp-server-core"},
 			{Name: "desktop", Command: "mcp-server-desktop"},
@@ -74,6 +76,8 @@ func TestGenerateSystemMD_NoMCPServers(t *testing.T) {
 	md := GenerateSystemMD(cfg)
 
 	assert.NotContains(t, md, "## 可用工具")
+	// Desktop section still included
+	assert.Contains(t, md, "## 桌面环境")
 }
 
 // IT-40: GeneratePortsMD produces valid markdown table
@@ -105,7 +109,7 @@ func TestGeneratePortsMD(t *testing.T) {
 	// Check descriptions
 	assert.Contains(t, md, "SSH")
 	assert.Contains(t, md, "HTTP")
-	assert.Contains(t, md, "前端开发 (React/Next.js)")
+	assert.Contains(t, md, "KasmVNC (桌面 Web 访问)")
 	assert.Contains(t, md, "后端开发 (Go/Java)")
 
 	// Check footer
@@ -140,5 +144,6 @@ func TestGetPortDescription(t *testing.T) {
 	assert.Equal(t, "SSH", GetPortDescription("22"))
 	assert.Equal(t, "HTTP", GetPortDescription("80"))
 	assert.Equal(t, "PostgreSQL", GetPortDescription("5432"))
+	assert.Equal(t, "KasmVNC (桌面 Web 访问)", GetPortDescription("3000"))
 	assert.Equal(t, "—", GetPortDescription("99999"))
 }
