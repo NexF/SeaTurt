@@ -29,7 +29,7 @@ func TestGenerateSystemMD_Default(t *testing.T) {
 	// Desktop section always included (unified desktop image)
 	assert.Contains(t, md, "## 桌面环境")
 	assert.Contains(t, md, "screenshot")
-	assert.Contains(t, md, "KasmVNC")
+	assert.Contains(t, md, "Selkies")
 	assert.NotContains(t, md, "## 附加指令")
 }
 
@@ -109,7 +109,7 @@ func TestGeneratePortsMD(t *testing.T) {
 	// Check descriptions
 	assert.Contains(t, md, "SSH")
 	assert.Contains(t, md, "HTTP")
-	assert.Contains(t, md, "KasmVNC (桌面 Web 访问)")
+	assert.Contains(t, md, "Selkies (桌面 Web 访问)")
 	assert.Contains(t, md, "后端开发 (Go/Java)")
 
 	// Check footer
@@ -144,6 +144,6 @@ func TestGetPortDescription(t *testing.T) {
 	assert.Equal(t, "SSH", GetPortDescription("22"))
 	assert.Equal(t, "HTTP", GetPortDescription("80"))
 	assert.Equal(t, "PostgreSQL", GetPortDescription("5432"))
-	assert.Equal(t, "KasmVNC (桌面 Web 访问)", GetPortDescription("3000"))
+	assert.Equal(t, "Selkies (桌面 Web 访问)", GetPortDescription("3000"))
 	assert.Equal(t, "—", GetPortDescription("99999"))
 }

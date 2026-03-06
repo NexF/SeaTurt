@@ -12,13 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// IT-49: All agents have KasmVNC ports (unified desktop image).
-func TestUnifiedImage_AlwaysKasmVNC(t *testing.T) {
+// IT-49: All agents have desktop ports (unified desktop image, Selkies WebRTC).
+func TestUnifiedImage_AlwaysDesktopPort(t *testing.T) {
 	t.Parallel()
 	ts, _ := newTestServer(t, nil)
 
 	resp := doRequest(t, ts, "POST", "/api/agents", map[string]any{
-		"name": "kasmvnc-test",
+		"name": "desktop-port-test",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
@@ -28,7 +28,7 @@ func TestUnifiedImage_AlwaysKasmVNC(t *testing.T) {
 
 	assert.Equal(t, agentpkg.StatusRunning, ag.Status)
 
-	// Check port mapping has 3000 (KasmVNC)
+	// Check port mapping has 3000 (Selkies WebRTC)
 	portsResp := doRequest(t, ts, "GET", "/api/agents/"+ag.ID+"/ports", nil)
 	assert.Equal(t, http.StatusOK, portsResp.StatusCode)
 
@@ -40,8 +40,8 @@ func TestUnifiedImage_AlwaysKasmVNC(t *testing.T) {
 	}
 	decodeJSON(t, portsResp, &ports)
 
-	if kasmPort, ok := ports.Ports["3000"]; ok {
-		assert.NotEmpty(t, kasmPort.HostPort, "KasmVNC port should be mapped")
+	if desktopPort, ok := ports.Ports["3000"]; ok {
+		assert.NotEmpty(t, desktopPort.HostPort, "Selkies desktop port should be mapped")
 	}
 }
 
@@ -129,13 +129,13 @@ func TestUnifiedImage_DesktopFieldIgnored(t *testing.T) {
 	assert.True(t, hasDesktop2)
 }
 
-// IT-53: GET /api/agents/:id returns kasmvnc_port and kasmvnc_url.
-func TestUnifiedImage_KasmVNCInResponse(t *testing.T) {
+// IT-53: GET /api/agents/:id returns desktop_port and desktop_url.
+func TestUnifiedImage_DesktopPortInResponse(t *testing.T) {
 	t.Parallel()
 	ts, _ := newTestServer(t, nil)
 
 	resp := doRequest(t, ts, "POST", "/api/agents", map[string]any{
-		"name": "kasmvnc-response-test",
+		"name": "desktop-response-test",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
@@ -150,10 +150,10 @@ func TestUnifiedImage_KasmVNCInResponse(t *testing.T) {
 	var fetched agentpkg.Agent
 	decodeJSON(t, getResp, &fetched)
 
-	// KasmVNC fields should be present (port is dynamically assigned)
-	if fetched.KasmVNCPort != "" {
-		assert.NotEmpty(t, fetched.KasmVNCURL)
-		assert.Contains(t, fetched.KasmVNCURL, "http://localhost:")
+	// Desktop fields should be present (port is dynamically assigned)
+	if fetched.DesktopPort != "" {
+		assert.NotEmpty(t, fetched.DesktopURL)
+		assert.Contains(t, fetched.DesktopURL, "http://localhost:")
 	}
 }
 
@@ -183,7 +183,7 @@ func TestUnifiedImage_SystemMDHasDesktopGuide(t *testing.T) {
 
 	assert.Contains(t, promptData.SystemPrompt, "桌面环境")
 	assert.Contains(t, promptData.SystemPrompt, "screenshot")
-	assert.Contains(t, promptData.SystemPrompt, "KasmVNC")
+	assert.Contains(t, promptData.SystemPrompt, "Selkies")
 }
 
 // IT-55: Port mappings do not contain 5900/6080 (old VNC ports).
@@ -261,7 +261,7 @@ func TestUnifiedImage_DynamicPorts(t *testing.T) {
 	}
 }
 
-// IT-38: GET /api/agents/:id/desktop returns correct KasmVNC info.
+// IT-38: GET /api/agents/:id/desktop returns correct desktop info.
 func TestUnifiedImage_DesktopAPI(t *testing.T) {
 	t.Parallel()
 	ts, _ := newTestServer(t, nil)
@@ -279,8 +279,8 @@ func TestUnifiedImage_DesktopAPI(t *testing.T) {
 	assert.Equal(t, http.StatusOK, desktopResp.StatusCode)
 
 	var desktopInfo struct {
-		KasmVNCPort string `json:"kasmvnc_port"`
-		KasmVNCURL  string `json:"kasmvnc_url"`
+		DesktopPort string `json:"desktop_port"`
+		DesktopURL  string `json:"desktop_url"`
 		Status      string `json:"status"`
 	}
 	err := json.NewDecoder(desktopResp.Body).Decode(&desktopInfo)

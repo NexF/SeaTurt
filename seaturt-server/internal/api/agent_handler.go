@@ -213,12 +213,12 @@ func (h *AgentHandler) ListModels(c *gin.Context) {
 
 // DesktopInfo represents the desktop status in the API response.
 type DesktopInfo struct {
-	KasmVNCPort string `json:"kasmvnc_port,omitempty"`
-	KasmVNCURL  string `json:"kasmvnc_url,omitempty"`
+	DesktopPort string `json:"desktop_port,omitempty"`
+	DesktopURL  string `json:"desktop_url,omitempty"`
 	Status      string `json:"status"`
 }
 
-// GetDesktop handles GET /api/agents/:id/desktop — returns desktop status and KasmVNC URLs.
+// GetDesktop handles GET /api/agents/:id/desktop — returns desktop status and Selkies WebRTC URLs.
 func (h *AgentHandler) GetDesktop(c *gin.Context) {
 	id := c.Param("id")
 
@@ -237,8 +237,8 @@ func (h *AgentHandler) GetDesktop(c *gin.Context) {
 		portMap, err := h.mgr.GetMappedPorts(c.Request.Context(), ag)
 		if err == nil {
 			if hp, ok := portMap["3000"]; ok {
-				info.KasmVNCPort = hp
-				info.KasmVNCURL = "http://localhost:" + hp
+				info.DesktopPort = hp
+				info.DesktopURL = "http://localhost:" + hp
 			}
 		}
 	}

@@ -35,8 +35,8 @@ type Agent struct {
 	Image         string      `json:"image"`
 	WorkspacePath string      `json:"workspace_path"`
 	Config        AgentConfig `json:"config"`
-	KasmVNCPort   string      `json:"kasmvnc_port,omitempty"`
-	KasmVNCURL    string      `json:"kasmvnc_url,omitempty"`
+	DesktopPort   string      `json:"desktop_port,omitempty"`
+	DesktopURL    string      `json:"desktop_url,omitempty"`
 	CreatedAt     time.Time   `json:"created_at"`
 	UpdatedAt     time.Time   `json:"updated_at"`
 }

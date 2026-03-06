@@ -109,14 +109,14 @@ export default function DesktopEntry({ agent }: Props) {
   }, [])
 
   const handleClick = useCallback(() => {
-    if (!desktop?.kasmvnc_url) return
+    if (!desktop?.desktop_url) return
     if (role !== "idle") return
     // Open as a separate browser window (not a tab in the same window).
     // When controller and shared viewer are tabs in the same Chrome window,
     // Chrome throttles WebRTC in the inactive tab, causing the preview to black out.
     // A separate window keeps both connections active.
     const win = window.open(
-      desktop.kasmvnc_url,
+      desktop.desktop_url,
       `seaturt-desktop-${agent.id}`,
       "noopener=no,width=1920,height=1080"
     )
@@ -135,7 +135,7 @@ export default function DesktopEntry({ agent }: Props) {
         setRole("idle")
       }
     }, 3000)
-  }, [desktop?.kasmvnc_url, role])
+  }, [desktop?.desktop_url, role])
 
   // Scale factor: map container width to a 1920px iframe
   const iframeW = 1920
@@ -177,7 +177,7 @@ export default function DesktopEntry({ agent }: Props) {
     )
   }
 
-  if (!desktop || !desktop.kasmvnc_url) {
+  if (!desktop || !desktop.desktop_url) {
     return (
       <div className="px-4 py-3">
         <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
@@ -234,7 +234,7 @@ export default function DesktopEntry({ agent }: Props) {
       >
         <iframe
           key={`${agent.id}-${role === "shared" ? "shared" : "ctrl"}`}
-          src={role === "shared" ? `${desktop.kasmvnc_url}#shared` : desktop.kasmvnc_url}
+          src={role === "shared" ? `${desktop.desktop_url}#shared` : desktop.desktop_url}
           style={{
             width: `${iframeW}px`,
             height: `${iframeH}px`,

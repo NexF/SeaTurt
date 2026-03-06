@@ -245,10 +245,10 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		if err := os.WriteFile(filepath.Join(seaturtDir, "PORTS.md"), []byte(portsMD), 0644); err != nil {
 			slog.Warn("failed to write PORTS.md", "err", err)
 		}
-		// KasmVNC port (always available — unified desktop image)
+		// Desktop port (always available — unified desktop image, Selkies WebRTC)
 		if hp, ok := portMap["3000"]; ok {
-			ag.KasmVNCPort = hp
-			ag.KasmVNCURL = fmt.Sprintf("http://localhost:%s", hp)
+			ag.DesktopPort = hp
+			ag.DesktopURL = fmt.Sprintf("http://localhost:%s", hp)
 		}
 	}
 

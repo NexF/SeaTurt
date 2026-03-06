@@ -20,8 +20,8 @@ export interface Agent {
   image: string
   workspace_path: string
   config: AgentConfig
-  kasmvnc_port?: string
-  kasmvnc_url?: string
+  desktop_port?: string
+  desktop_url?: string
   created_at: string
   updated_at: string
 }
@@ -85,8 +85,8 @@ export interface FileEntry {
 }
 
 export interface DesktopInfo {
-  kasmvnc_port?: string
-  kasmvnc_url?: string
+  desktop_port?: string
+  desktop_url?: string
   status: string
 }
 
