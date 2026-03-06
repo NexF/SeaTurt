@@ -13,6 +13,9 @@ type DesktopRole = "idle" | "waiting" | "shared"
 // When the component unmounts (agent switch) and remounts, we can recover the WindowProxy
 // and restore the correct role instead of always resetting to "idle" (controller).
 const fullDesktopWindows = new Map<string, Window>()
+// Track agents whose desktop has been ready at least once (Selkies already started).
+// When switching back to such an agent, skip the 2s startup delay.
+const readyAgents = new Set<string>()
 
 export default function DesktopEntry({ agent }: Props) {
   const [desktop, setDesktop] = useState<DesktopInfo | null>(null)
@@ -36,16 +39,46 @@ export default function DesktopEntry({ agent }: Props) {
   const switchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
 
+  // Delay iframe rendering: Selkies needs time to start after the container reports "running".
+  // Show a loading spinner during the delay instead of loading an unready iframe.
+  const [ready, setReady] = useState(() => {
+    // If the desktop was already ready before (agent switch back), skip delay.
+    if (readyAgents.has(agent.id)) return true
+    // If recovering into shared mode, the desktop was already up — no need to delay.
+    const existingWin = fullDesktopWindows.get(agent.id)
+    return !!(existingWin && !existingWin.closed)
+  })
+  const readyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
     if (agent.status !== "running") {
       setDesktop(null)
+      setReady(false)
+      readyAgents.delete(agent.id)
       return
     }
     setLoading(true)
+    const alreadyReady = readyAgents.has(agent.id)
     api.getDesktop(agent.id).then((info) => {
       setDesktop(info)
       setLoading(false)
+      if (alreadyReady) {
+        // Desktop was already up before switch — no delay needed
+        setReady(true)
+      } else if (!ready) {
+        readyTimerRef.current = setTimeout(() => {
+          readyTimerRef.current = null
+          setReady(true)
+          readyAgents.add(agent.id)
+        }, 2000)
+      }
     }).catch(() => setLoading(false))
+    return () => {
+      if (readyTimerRef.current) {
+        clearTimeout(readyTimerRef.current)
+        readyTimerRef.current = null
+      }
+    }
   }, [agent.id, agent.status])
 
   // Poll to detect when the full desktop tab is closed (in waiting or shared)
@@ -156,6 +189,24 @@ export default function DesktopEntry({ agent }: Props) {
           style={{ height: `${Math.round(displayH)}px` }}
         >
           <span className="text-xs text-muted-foreground">桌面不可用</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (!ready) {
+    return (
+      <div className="px-4 py-3">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+          <Monitor className="h-4 w-4" />
+          <span>桌面</span>
+        </div>
+        <div
+          className="rounded-md border border-border bg-muted/30 flex items-center justify-center"
+          style={{ height: `${Math.round(displayH)}px` }}
+        >
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          <span className="ml-2 text-xs text-muted-foreground">桌面启动中…</span>
         </div>
       </div>
     )
