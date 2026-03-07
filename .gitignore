@@ -28,6 +28,11 @@ __pycache__/
 .venv/
 venv/
 
+# PyInstaller build artifacts (under mcp-servers)
+**/mcp-servers/**/build/
+**/mcp-servers/**/dist/
+**/mcp-servers/**/*.spec
+
 # Config (may contain secrets)
 # seaturt-server/config.yaml
 
