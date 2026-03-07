@@ -39,9 +39,13 @@ export default function CreateAgentDialog({ open, onOpenChange }: Props) {
     setLoading(true)
     setError("")
 
+    const selectedModel = model || defaultModel || undefined
+    const selectedProvider = models.find((m) => m.id === selectedModel)?.provider
+
     const agent = await createAgent(
       name.trim(),
-      model || defaultModel || undefined
+      selectedModel,
+      selectedProvider
     ).catch((e: Error) => {
       setError(e.message)
       return null

@@ -135,6 +135,7 @@ func (m *Manager) CancelActiveToolCall(agentID, toolCallID string) bool {
 // CreateAgentRequest is the input for creating a new agent.
 type CreateAgentRequest struct {
 	Name         string            `json:"name"`
+	Provider     string            `json:"provider,omitempty"`
 	Model        string            `json:"model,omitempty"`
 	MCPServers   []MCPServerConfig `json:"mcp_servers,omitempty"`
 	ExtraMounts  []string          `json:"extra_mounts,omitempty"`
@@ -170,7 +171,11 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		mcpServers = append(mcpServers, MCPServerConfig{Name: "desktop", Command: "mcp-server-desktop"})
 	}
 
-	// Determine model
+	// Determine provider and model
+	provider := req.Provider
+	if provider == "" {
+		provider = m.cfg.DefaultProvider
+	}
 	model := req.Model
 	if model == "" {
 		model = m.cfg.DefaultModel
@@ -208,6 +213,7 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		Image:         agentImage,
 		WorkspacePath: workspacePath,
 		Config: AgentConfig{
+			Provider:    provider,
 			Model:       model,
 			MCPServers:  mcpServers,
 			ExtraMounts: req.ExtraMounts,
@@ -529,9 +535,36 @@ func (m *Manager) GetRouter(id string) ToolRouter {
 	return m.routers[id]
 }
 
-// GetLLMClient returns the LLM client.
+// GetLLMClient returns the default LLM client.
 func (m *Manager) GetLLMClient() *llm.Client {
 	return m.llmClient
+}
+
+// GetLLMClientForAgent returns an LLM client configured for a specific agent's provider+model.
+// If the agent's provider+model matches the default, returns the shared default client.
+// Otherwise creates a new client on-the-fly.
+func (m *Manager) GetLLMClientForAgent(ag *Agent) *llm.Client {
+	endpoint, err := m.cfg.ResolveLLM(ag.Config.Provider, ag.Config.Model)
+	if err != nil {
+		slog.Warn("failed to resolve agent LLM, falling back to default",
+			"agent_id", ag.ID,
+			"provider", ag.Config.Provider,
+			"model", ag.Config.Model,
+			"err", err,
+		)
+		return m.llmClient
+	}
+
+	// Check if it matches the default client (avoid creating duplicates)
+	defaultEndpoint, _ := m.cfg.ResolveLLM("", "")
+	if defaultEndpoint != nil &&
+		endpoint.BaseURL == defaultEndpoint.BaseURL &&
+		endpoint.Model == defaultEndpoint.Model &&
+		endpoint.APIKey == defaultEndpoint.APIKey {
+		return m.llmClient
+	}
+
+	return llm.NewClient(endpoint.BaseURL, endpoint.APIKey, endpoint.Model, endpoint.API, endpoint.Headers)
 }
 
 // GetStore returns the store for message operations.

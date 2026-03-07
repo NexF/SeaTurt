@@ -34,3 +34,5 @@ venv/
 # Temp
 *.tmp
 *.log
+
+release.tar

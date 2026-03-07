@@ -23,6 +23,7 @@ export async function listAgents(): Promise<Agent[]> {
 
 export async function createAgent(body: {
   name: string
+  provider?: string
   model?: string
 }): Promise<Agent> {
   return request<Agent>("/agents", {

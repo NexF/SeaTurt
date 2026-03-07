@@ -74,7 +74,7 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 	}
 
 	// Validate content types against model capabilities
-	endpoint, err := h.mgr.GetConfig().ResolveLLM("", ag.Config.Model)
+	endpoint, err := h.mgr.GetConfig().ResolveLLM(ag.Config.Provider, ag.Config.Model)
 	if err == nil {
 		if err := llm.ValidateContent(endpoint.Model, endpoint.Input, content); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -139,7 +139,7 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 
 	// Run agent loop with SSE streaming + incremental message saving
 	loopCfg := agent.LoopConfig{
-		LLMClient:    h.mgr.GetLLMClient(),
+		LLMClient:    h.mgr.GetLLMClientForAgent(ag),
 		Router:       router,
 		SystemPrompt: h.mgr.LoadSystemPrompt(ag),
 		OnMessage: func(msg llm.ChatMessage) {

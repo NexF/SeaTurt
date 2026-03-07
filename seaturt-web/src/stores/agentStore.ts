@@ -17,7 +17,7 @@ interface AgentStore {
   fetchAgents: () => Promise<void>
   fetchModels: () => Promise<void>
   selectAgent: (id: string | null) => void
-  createAgent: (name: string, model?: string) => Promise<Agent>
+  createAgent: (name: string, model?: string, provider?: string) => Promise<Agent>
   startAgent: (id: string) => Promise<void>
   stopAgent: (id: string) => Promise<void>
   deleteAgent: (id: string) => Promise<void>
@@ -81,8 +81,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   selectAgent: (id) => set({ selectedAgentId: id }),
 
-  createAgent: async (name, model) => {
-    const agent = await api.createAgent({ name, model })
+  createAgent: async (name, model, provider) => {
+    const agent = await api.createAgent({ name, model, provider })
     set((s) => ({ agents: [...s.agents, agent] }))
     return agent
   },

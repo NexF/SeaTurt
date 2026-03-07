@@ -21,6 +21,7 @@ type MCPServerConfig struct {
 }
 
 type AgentConfig struct {
+	Provider    string            `json:"provider"`
 	Model       string            `json:"model"`
 	MCPServers  []MCPServerConfig `json:"mcp_servers"`
 	ExtraMounts []string          `json:"extra_mounts,omitempty"`

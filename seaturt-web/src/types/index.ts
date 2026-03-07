@@ -6,6 +6,7 @@ export interface MCPServerConfig {
 }
 
 export interface AgentConfig {
+  provider: string
   model: string
   mcp_servers: MCPServerConfig[]
   extra_mounts?: string[]
