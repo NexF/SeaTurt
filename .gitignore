@@ -1,5 +1,5 @@
-# Binaries
-seaturt-server/bin/
+# Release artifacts (server + MCP bins are all under seaturt-server/release/)
+seaturt-server/release/
 seaturt-server/server
 
 # Dependencies

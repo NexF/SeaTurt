@@ -6,6 +6,7 @@
 
 - **容器隔离** — 每个 Agent 独立 Docker 容器，互不干扰
 - **MCP 协议** — 通过 `docker exec` stdio 与容器内 MCP Server 通信
+- **MCP 自动发现** — MCP 二进制在宿主机预编译，Agent 启动时注入容器并自动发现 tools（支持 Go / Python）
 - **内置工具** — shell 执行、文件读写（`mcp-server-core`）+ 桌面操作（`mcp-server-desktop`）
 - **多模态输入** — 支持文字 + 图片（JSON base64 / multipart 上传），自动适配 OpenAI / Anthropic 格式
 - **桌面环境** — 内置 KDE Plasma + Selkies WebRTC，Agent 可截屏、模拟鼠标键盘操作
@@ -34,23 +35,71 @@
 - Node.js 18+（前端构建）
 - Docker（推荐 [OrbStack](https://orbstack.dev)）
 
-### 构建沙箱镜像
+### 构建
+
+项目提供统一构建脚本 `build.sh`，支持分步构建或一键 release：
+
+```bash
+# 查看帮助
+./build.sh --help
+
+# 完整构建（默认 amd64）：前端 + MCP + 后端 + Docker 镜像
+./build.sh release
+
+# 指定 arm64 架构
+./build.sh release --arch arm64
+```
+
+#### 分步构建
+
+```bash
+# 仅构建前端（产物嵌入 seaturt-server/cmd/server/web/dist）
+./build.sh web
+
+# 仅构建 MCP Server 二进制
+./build.sh mcp
+./build.sh mcp --arch arm64   # 交叉编译
+
+# 仅构建后端 Go 二进制
+./build.sh server
+
+# 仅构建 Docker 沙箱镜像
+./build.sh image
+```
+
+也可通过 Makefile 调用：
 
 ```bash
 cd seaturt-server
-
-# 构建沙箱镜像（统一镜像，内置桌面环境 + MCP Server）
-make build-image
+make build-web     # 构建前端
+make build-mcp     # 构建 MCP Server
+make build-image   # 构建 Docker 镜像
+make release       # 完整 release
 ```
+
+#### 构建产物
+
+| 产物 | 路径 | 说明 |
+|------|------|------|
+| Release 目录 | `seaturt-server/release/<os>_<arch>/` | 自包含平台目录，可直接打包分发 |
+| 后端二进制 | `seaturt-server/release/<os>_<arch>/seaturt` | 内嵌前端静态资源的单一二进制 |
+| MCP 二进制 | `seaturt-server/release/<os>_<arch>/mcp-bins/` | `mcp-server-core`、`mcp-server-desktop` 等 |
+| 配置文件 | `seaturt-server/release/<os>_<arch>/config.yaml` | 自动从源码目录复制 |
+| Docker 镜像 | `seaturt/sandbox:latest` | 沙箱运行环境（桌面 + 基础工具） |
+
+> MCP 二进制不再内置于 Docker 镜像中，而是在 Agent 启动时由宿主机通过 Docker API 注入容器，并自动发现 tools。
 
 ### 开发模式（前后端分离）
 
 前后端分别启动，适合开发调试：
 
 ```bash
+# 先构建 MCP Server（首次 / MCP 代码变更后需要）
+./build.sh mcp
+
 # 终端 1：启动后端
 cd seaturt-server
-make build && ./bin/containeragent-server
+go run ./cmd/server/
 
 # 终端 2：启动前端 dev server
 cd seaturt-web
@@ -63,36 +112,22 @@ npm run dev          # → http://localhost:5173
 前端通过 `go:embed` 嵌入后端二进制，部署时只需一个可执行文件：
 
 ```bash
-cd seaturt-server
+# 一键构建
+./build.sh release
 
-# 一键构建：编译前端 → 复制到 embed 目录 → 编译 Go 二进制
-make release
-
-# 产物在 bin/seaturt（约 36MB，内含前端静态资源）
-ls -lh bin/seaturt
+# 产物目录（自包含，可直接打包分发）
+ls -lh seaturt-server/release/darwin_arm64/
+# ├── config.yaml
+# ├── seaturt
+# └── mcp-bins/
+#     ├── mcp-server-core
+#     └── mcp-server-desktop
 
 # 启动（前端自动嵌入，访问 http://localhost:8080 即可）
-./bin/seaturt
+cd seaturt-server/release/darwin_arm64 && ./seaturt
 
 # 或后台启动
-nohup ./bin/seaturt > server.log 2>&1 &
-
-# 实时查看日志
-tail -f server.log
-```
-
-`make release` 等价于以下步骤：
-
-```bash
-# 1. 构建前端
-cd seaturt-web && npm run build && cd ..
-
-# 2. 复制前端产物到 Go embed 目录
-rm -rf cmd/server/web/dist
-cp -r ../seaturt-web/dist cmd/server/web/dist
-
-# 3. 编译 Go 二进制（go:embed 自动打包前端）
-go build -o bin/seaturt ./cmd/server/
+nohup ./seaturt > server.log 2>&1 &
 ```
 
 ### 配置
@@ -184,6 +219,7 @@ make test-integration
 | [测试指南](docs/testing.md) | 测试策略、运行方式、用例矩阵 |
 | [v0.0.2 多模态开发](docs/v0.0.2/development.md) | 多模态支持完整开发记录 |
 | [v0.0.3 桌面环境](docs/v0.0.3/development.md) | VNC 桌面 + 截屏能力设计与实现 |
+| [v0.1.4 MCP 外置化](docs/v0.1.4/development.md) | MCP 构建外置化、自动发现、热加载预留 |
 
 ## License
 

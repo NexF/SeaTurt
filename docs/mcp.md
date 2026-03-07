@@ -85,11 +85,11 @@ tools:
 
 ## MCP Server：`mcp-server-desktop`
 
-桌面 Agent 自动启用，提供 GUI 桌面操作能力。依赖容器内的 Xvfb + GNOME 桌面环境。
+桌面 Agent 自动启用，提供 GUI 桌面操作能力。依赖容器内的 X11 桌面环境（LinuxServer Webtop / Selkies，DISPLAY 默认 `:1`）。
 
 | Tool（LLM 看到的名称） | 原始名称 | 说明 | 参数 | 返回类型 |
 |------------------------|---------|------|------|---------|
-| `desktop-screenshot` | `screenshot` | 桌面全屏截图 | `region?: {x, y, width, height}` | image (PNG base64) |
+| `desktop-screenshot` | `screenshot` | 桌面截图，默认叠加坐标网格辅助定位 | `region?: {x, y, width, height}`, `show_grid?: bool (default: true)` | image (PNG base64) |
 | `desktop-mouse_click` | `mouse_click` | 模拟鼠标点击 | `x: int, y: int, button?: "left"\|"right"\|"middle"` | text |
 | `desktop-mouse_move` | `mouse_move` | 移动鼠标 | `x: int, y: int` | text |
 | `desktop-mouse_drag` | `mouse_drag` | 鼠标拖拽 | `from_x, from_y, to_x, to_y: int` | text |
@@ -97,8 +97,22 @@ tools:
 | `desktop-keyboard_key` | `keyboard_key` | 模拟按键/组合键 | `key: string` | text |
 | `desktop-window_list` | `window_list` | 列出桌面窗口 | 无 | text |
 | `desktop-window_focus` | `window_focus` | 聚焦指定窗口 | `window_id?: string, title?: string` | text |
-| `desktop-open_app` | `open_app` | 打开应用程序 | `app: string` | text |
+| `desktop-open_app` | `open_app` | 打开应用程序（setsid 分离，启动失败会报错） | `app: string` | text |
 | `desktop-desktop_wait` | `desktop_wait` | 等待渲染稳定后截屏 | `delay_ms?: int` | image (PNG base64) |
+
+### 截图坐标网格
+
+`screenshot` 默认在截图上叠加 **100px 间隔的坐标网格**（红色半透明），帮助 LLM 更准确地估算点击位置：
+
+- 网格线每 100px 一条，交叉点标注绝对桌面坐标（如 `400,300`）
+- 顶部和左侧有轴标签
+- 区域截图（`region`）时标签同样显示绝对桌面坐标，LLM 可直接用于点击
+- 传 `show_grid: false` 获取无网格的干净截图
+- 通过 ImageMagick（`identify` + `convert`）绘制，无额外依赖
+
+### open_app 启动机制
+
+`open_app` 通过 `setsid` 将应用进程完全分离（detach），避免 MCP 进程退出时杀死 GUI 应用。启动后等待 1 秒检查进程是否存活，若已退出则读取 stderr 返回错误信息，不再静默失败。
 
 ## MCP Server 清单
 

@@ -122,7 +122,7 @@ func handleToolsList(req Request) {
 		Tools: []ToolDefinition{
 			{
 				Name:        "screenshot",
-				Description: "Take a screenshot of the desktop. Optionally specify a region.",
+				Description: "Take a screenshot of the desktop. By default a coordinate grid overlay is drawn to help locate positions. Use show_grid=false to get a clean image.",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -135,6 +135,10 @@ func handleToolsList(req Request) {
 								"width":  map[string]any{"type": "integer"},
 								"height": map[string]any{"type": "integer"},
 							},
+						},
+						"show_grid": map[string]any{
+							"type":        "boolean",
+							"description": "Overlay a coordinate grid on the screenshot (default: true). Grid lines every 100px with labeled coordinates help estimate click positions.",
 						},
 					},
 				},

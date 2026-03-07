@@ -1,12 +1,14 @@
 package container
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/docker/docker/api/types"
@@ -71,8 +73,8 @@ type CreateContainerOpts struct {
 func (m *Manager) CreateContainer(ctx context.Context, opts CreateContainerOpts) (string, error) {
 	// Build env vars — inject PUID/PGID/TZ for LinuxServer base image
 	envList := []string{
-		fmt.Sprintf("PUID=%d", os.Getuid()),
-		fmt.Sprintf("PGID=%d", os.Getgid()),
+		"PUID=0",
+		"PGID=0",
 		"TZ=Asia/Shanghai",
 	}
 	for k, v := range opts.EnvVars {
@@ -289,6 +291,62 @@ func (m *Manager) ExecStdio(ctx context.Context, containerID string, opts ExecAt
 	)
 
 	return hijacked, nil
+}
+
+// CopyToContainer copies a single file from the host into a container directory.
+// The file is packed into a tar archive and sent via the Docker API.
+// If the file has the executable bit set on the host, it is preserved in the tar.
+func (m *Manager) CopyToContainer(ctx context.Context, containerID, srcPath, dstDir string) error {
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", srcPath, err)
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", srcPath, err)
+	}
+
+	// Build a tar archive containing the single file
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	// Preserve executable permission
+	mode := stat.Mode()
+	if mode&0111 != 0 {
+		mode = 0755
+	} else {
+		mode = 0644
+	}
+
+	header := &tar.Header{
+		Name: filepath.Base(srcPath),
+		Size: stat.Size(),
+		Mode: int64(mode),
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		return fmt.Errorf("tar write header: %w", err)
+	}
+	if _, err := io.Copy(tw, f); err != nil {
+		return fmt.Errorf("tar write body: %w", err)
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("tar close: %w", err)
+	}
+
+	// Copy to container
+	err = m.cli.CopyToContainer(ctx, containerID, dstDir, &buf, container.CopyToContainerOptions{})
+	if err != nil {
+		return fmt.Errorf("copy to container: %w", err)
+	}
+
+	slog.Debug("file copied to container",
+		"src", srcPath,
+		"dst", dstDir+"/"+filepath.Base(srcPath),
+		"container", containerID[:min(12, len(containerID))],
+	)
+	return nil
 }
 
 // ImageExists checks if a Docker image exists locally.

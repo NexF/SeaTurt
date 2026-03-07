@@ -137,11 +137,17 @@ func (c *Client) buildRequestBody(messages []ChatMessage, tools []ToolDef, strea
 	})
 }
 
-// normalizeToolCalls ensures all ToolCalls are wire-format compliant.
-// Fixes common issues from different LLM providers:
+// normalizeToolCalls ensures all ToolCalls are wire-format compliant for the LLM API.
+// This ONLY affects what gets sent back to the LLM API — it does NOT modify the
+// original ToolCalls used for MCP execution (those are passed as-is so the LLM
+// can learn from any parsing errors).
+//
+// Fixes:
 //   - Empty arguments "" → "{}" (must be valid JSON)
 //   - Missing type field → "function"
 //   - Whitespace-only arguments → "{}"
+//   - Invalid JSON arguments → wrapped as {"_raw": "..."} to preserve content
+//     while keeping the payload valid JSON for the API
 func normalizeToolCalls(tcs []ToolCall) []ToolCall {
 	if len(tcs) == 0 {
 		return tcs
@@ -153,10 +159,20 @@ func normalizeToolCalls(tcs []ToolCall) []ToolCall {
 		if normalized[i].Type == "" {
 			normalized[i].Type = "function"
 		}
-		// Ensure arguments is valid JSON
+		// Ensure arguments is valid JSON for the API
 		args := strings.TrimSpace(normalized[i].Function.Arguments)
 		if args == "" {
 			normalized[i].Function.Arguments = "{}"
+		} else if !json.Valid([]byte(args)) {
+			// Arguments is not valid JSON (e.g. concatenated objects like `{...}{...}`).
+			// Wrap it as a JSON string so the API accepts it, and the LLM can still
+			// see what it originally generated.
+			slog.Warn("tool_call arguments not valid JSON, wrapping as _raw for API compliance",
+				"tool", tc.Function.Name,
+				"original", truncateLog(args, 200),
+			)
+			wrapped, _ := json.Marshal(map[string]string{"_raw": args})
+			normalized[i].Function.Arguments = string(wrapped)
 		}
 	}
 	return normalized

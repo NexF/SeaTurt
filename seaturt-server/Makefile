@@ -1,9 +1,10 @@
-.PHONY: build run clean test test-integration test-e2e build-test-image build-image build-web release
+.PHONY: build run clean test test-integration test-e2e build-test-image build-image build-web build-mcp release tidy lint
 
 BINARY_NAME=containeragent-server
 BUILD_DIR=bin
 WEB_DIR=../seaturt-web
 EMBED_DIR=cmd/server/web/dist
+BUILD_SH=../build.sh
 
 build:
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/server/
@@ -14,19 +15,21 @@ run: build
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -rf $(EMBED_DIR)
+	rm -rf mcp-bins/mcp-server-* mcp-bins/*.py
 	mkdir -p $(EMBED_DIR)
 	echo '<!DOCTYPE html><html><body>placeholder</body></html>' > $(EMBED_DIR)/index.html
 
 # Build frontend and copy to embed directory
 build-web:
-	cd $(WEB_DIR) && npm run build
-	rm -rf $(EMBED_DIR)
-	cp -r $(WEB_DIR)/dist $(EMBED_DIR)
+	$(BUILD_SH) web
 
-# Full production build: frontend + backend → single binary
-release: build-web
-	go build -o $(BUILD_DIR)/seaturt ./cmd/server/
-	@echo "✅ Production binary: $(BUILD_DIR)/seaturt"
+# Build MCP servers → mcp-bins/
+build-mcp:
+	$(BUILD_SH) mcp
+
+# Full production build: frontend + backend + mcp + image
+release:
+	$(BUILD_SH) release
 
 test:
 	go test ./internal/... -v -race
@@ -41,7 +44,7 @@ build-test-image:
 	docker build -t containeragent/sandbox:test ./docker/sandbox/
 
 build-image:
-	docker build -t seaturt/sandbox:latest ./docker/sandbox/
+	$(BUILD_SH) image
 
 tidy:
 	go mod tidy

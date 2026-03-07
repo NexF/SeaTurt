@@ -322,77 +322,76 @@ func TestReload_NoDir(t *testing.T) {
 	assert.Contains(t, err.Error(), "no directory loaded")
 }
 
-// --- WriteBuiltinTools tests ---
+// --- AddServer / RemoveServer tests ---
 
-func TestWriteBuiltinTools_All(t *testing.T) {
-	dir := t.TempDir()
-
-	err := WriteBuiltinTools(dir, nil)
-	require.NoError(t, err)
-
-	// Check core.yaml exists and is valid
+func TestAddServer(t *testing.T) {
 	reg := NewToolRegistry()
-	err = reg.LoadFromDir(dir)
-	require.NoError(t, err)
 
-	coreSrv, err := reg.GetServer("core")
-	require.NoError(t, err)
-	assert.Equal(t, "mcp-server-core", coreSrv.Command)
-	assert.True(t, coreSrv.Enabled)
-	assert.Len(t, coreSrv.Tools, 4) // shell_exec, file_read, file_write, file_list
-
-	desktopSrv, err := reg.GetServer("desktop")
-	require.NoError(t, err)
-	assert.Equal(t, "mcp-server-desktop", desktopSrv.Command)
-	assert.True(t, desktopSrv.Enabled)
-	assert.Len(t, desktopSrv.Tools, 10) // screenshot, mouse_click, mouse_move, etc.
-}
-
-func TestWriteBuiltinTools_Selective(t *testing.T) {
-	dir := t.TempDir()
-
-	err := WriteBuiltinTools(dir, []string{"core"})
-	require.NoError(t, err)
-
-	// Only core.yaml should exist
-	entries, _ := os.ReadDir(dir)
-	assert.Len(t, entries, 1)
-	assert.Equal(t, "core.yaml", entries[0].Name())
-}
-
-func TestWriteBuiltinTools_UnknownServer(t *testing.T) {
-	dir := t.TempDir()
-
-	err := WriteBuiltinTools(dir, []string{"nonexistent"})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown builtin server")
-}
-
-func TestWriteBuiltinTools_RoundTrip(t *testing.T) {
-	// Write builtin tools → load from YAML → verify AllTools returns correct prefixed names
-	dir := t.TempDir()
-
-	err := WriteBuiltinTools(dir, nil)
-	require.NoError(t, err)
-
-	reg := NewToolRegistry()
-	err = reg.LoadFromDir(dir)
-	require.NoError(t, err)
-
-	tools := reg.AllTools()
-	names := make([]string, 0, len(tools))
-	for _, t := range tools {
-		names = append(names, t.Name)
+	srv := &ServerDef{
+		Name:    "custom",
+		Command: "mcp-custom",
+		Enabled: true,
+		Tools: []ToolDefinition{
+			{Name: "my_tool", Description: "A custom tool"},
+		},
 	}
-	sort.Strings(names)
 
-	// Should have all core + desktop tools with prefix
-	assert.Contains(t, names, "core-shell_exec")
-	assert.Contains(t, names, "core-file_read")
-	assert.Contains(t, names, "core-file_write")
-	assert.Contains(t, names, "core-file_list")
-	assert.Contains(t, names, "desktop-screenshot")
-	assert.Contains(t, names, "desktop-mouse_click")
+	reg.AddServer("custom", srv)
+
+	got, err := reg.GetServer("custom")
+	require.NoError(t, err)
+	assert.Equal(t, "custom", got.Name)
+	assert.Len(t, got.Tools, 1)
+
+	// AllTools should include it
+	tools := reg.AllTools()
+	assert.Len(t, tools, 1)
+	assert.Equal(t, "custom-my_tool", tools[0].Name)
+}
+
+func TestAddServer_Overwrite(t *testing.T) {
+	reg := NewToolRegistry()
+
+	srv1 := &ServerDef{
+		Name: "test", Command: "mcp-v1", Enabled: true,
+		Tools: []ToolDefinition{{Name: "old_tool", Description: "Old"}},
+	}
+	srv2 := &ServerDef{
+		Name: "test", Command: "mcp-v2", Enabled: true,
+		Tools: []ToolDefinition{{Name: "new_tool", Description: "New"}},
+	}
+
+	reg.AddServer("test", srv1)
+	reg.AddServer("test", srv2) // overwrite
+
+	got, err := reg.GetServer("test")
+	require.NoError(t, err)
+	assert.Equal(t, "mcp-v2", got.Command)
+	assert.Equal(t, "new_tool", got.Tools[0].Name)
+}
+
+func TestRemoveServer(t *testing.T) {
+	reg := NewToolRegistry()
+
+	srv := &ServerDef{
+		Name: "temp", Command: "mcp-temp", Enabled: true,
+		Tools: []ToolDefinition{{Name: "t", Description: "T"}},
+	}
+	reg.AddServer("temp", srv)
+	assert.Len(t, reg.AllTools(), 1)
+
+	ok := reg.RemoveServer("temp")
+	assert.True(t, ok)
+	assert.Empty(t, reg.AllTools())
+
+	_, err := reg.GetServer("temp")
+	assert.Error(t, err)
+}
+
+func TestRemoveServer_NotFound(t *testing.T) {
+	reg := NewToolRegistry()
+	ok := reg.RemoveServer("nonexistent")
+	assert.False(t, ok)
 }
 
 // --- GetServer tests ---

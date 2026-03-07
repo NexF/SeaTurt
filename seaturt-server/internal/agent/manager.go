@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +15,8 @@ import (
 	"github.com/seaturt/server/internal/container"
 	"github.com/seaturt/server/internal/llm"
 	"github.com/seaturt/server/internal/mcp"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Store defines the persistence operations needed by Manager.
@@ -252,17 +256,17 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		}
 	}
 
-	// Write tools YAML to workspace/.seaturt/tools/
+	// Load MCP servers: copy binaries from host → discover tools → write YAML
 	toolsDir := filepath.Join(workspacePath, ".seaturt", "tools")
-	if err := mcp.WriteBuiltinTools(toolsDir, nil); err != nil {
+	if err := os.MkdirAll(toolsDir, 0755); err != nil {
 		_ = m.docker.RemoveContainer(ctx, containerID)
-		return nil, fmt.Errorf("write builtin tools: %w", err)
+		return nil, fmt.Errorf("create tools dir: %w", err)
 	}
 
-	// Copy MCP server binaries from container staging dir to workspace tools dir
-	if err := m.copyMCPBinaries(ctx, containerID); err != nil {
-		_ = m.docker.RemoveContainer(ctx, containerID)
-		return nil, fmt.Errorf("copy mcp binaries: %w", err)
+	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
+	mcpBinsDir := m.cfg.GetMCPBinsDir()
+	if err := m.loadMCPServers(ctx, containerID, mcpBinsDir, containerToolsDir, toolsDir); err != nil {
+		slog.Warn("failed to load some MCP servers", "err", err)
 	}
 
 	// Load tools from YAML (no MCP processes started)
@@ -273,7 +277,6 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 	}
 
 	// Create Executor (saves docker manager + container ID + tools dir path inside container)
-	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
 	executor := mcp.NewExecutor(m.docker, containerID, containerToolsDir)
 
 	// Create Router
@@ -424,14 +427,19 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 			slog.Warn("failed to write PORTS.md on start", "err", err)
 		}
 	}
-	// Re-load tools from YAML (no MCP processes started)
+	// Re-load MCP servers (may have new bins since last start)
 	toolsDir := filepath.Join(ag.WorkspacePath, ".seaturt", "tools")
+	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
+	mcpBinsDir := m.cfg.GetMCPBinsDir()
+	if err := m.loadMCPServers(ctx, ag.ContainerID, mcpBinsDir, containerToolsDir, toolsDir); err != nil {
+		slog.Warn("failed to load some MCP servers on start", "err", err)
+	}
+
 	registry := mcp.NewToolRegistry()
 	if err := registry.LoadFromDir(toolsDir); err != nil {
 		return fmt.Errorf("load tools: %w", err)
 	}
 
-	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
 	executor := mcp.NewExecutor(m.docker, ag.ContainerID, containerToolsDir)
 	router := mcp.NewRouter(registry, executor)
 
@@ -556,26 +564,214 @@ func (m *Manager) GetMappedPorts(ctx context.Context, ag *Agent) (map[string]str
 	return m.docker.GetMappedPorts(ctx, ag.ContainerID)
 }
 
-// mcpBinsStagingDir is the container path where MCP server binaries are staged in the Docker image.
-const mcpBinsStagingDir = "/opt/seaturt/mcp-bins"
+// containerMCPDiscoverTimeout is the timeout for running tools/list on a single MCP server.
+const containerMCPDiscoverTimeout = 10 * time.Second
 
-// copyMCPBinaries copies MCP server binaries from the container staging directory
-// to /workspace/.seaturt/tools/ so that the Executor can find them.
-func (m *Manager) copyMCPBinaries(ctx context.Context, containerID string) error {
-	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
-	cmd := []string{"sh", "-c", fmt.Sprintf(
-		"cp %s/* %s/ && chmod +x %s/*",
-		mcpBinsStagingDir, containerToolsDir, containerToolsDir,
-	)}
-	result, err := m.docker.Exec(ctx, containerID, cmd)
+// loadMCPServers scans srcDir for MCP binaries/scripts, copies each to the container,
+// discovers tools via MCP protocol, and writes YAML files.
+// This method is used by both Create() and Start().
+// Future hot-reload APIs can also call this method.
+func (m *Manager) loadMCPServers(ctx context.Context, containerID, srcDir, containerToolsDir, hostToolsDir string) error {
+	entries, err := os.ReadDir(srcDir)
 	if err != nil {
-		return fmt.Errorf("exec cp: %w", err)
+		if os.IsNotExist(err) {
+			slog.Warn("mcp-bins directory not found, skipping MCP loading", "dir", srcDir)
+			return nil
+		}
+		return fmt.Errorf("read mcp-bins dir: %w", err)
 	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("cp failed (exit %d): %s", result.ExitCode, result.Stderr)
+
+	loaded := 0
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == ".gitkeep" {
+			continue
+		}
+		srcPath := filepath.Join(srcDir, entry.Name())
+		if err := m.discoverAndLoadSingleMCP(ctx, containerID, srcPath, containerToolsDir, hostToolsDir); err != nil {
+			slog.Warn("failed to load MCP server, skipping",
+				"file", entry.Name(), "err", err)
+			continue
+		}
+		loaded++
 	}
-	slog.Debug("mcp binaries copied to workspace", "container", containerID[:12])
+
+	slog.Info("MCP servers loaded", "total", loaded, "src_dir", srcDir)
 	return nil
+}
+
+// discoverAndLoadSingleMCP handles the complete lifecycle for a single MCP server:
+//  1. Copy binary/script to container toolsDir
+//  2. Discover tools via MCP protocol (initialize + tools/list)
+//  3. Write YAML to both container and host toolsDir
+//
+// This method can be called individually for future hot-reload support.
+func (m *Manager) discoverAndLoadSingleMCP(ctx context.Context, containerID, srcPath, containerToolsDir, hostToolsDir string) error {
+	fileName := filepath.Base(srcPath)
+	serverName := deriveMCPServerName(fileName)
+
+	// 1. Copy binary/script to container
+	if err := m.docker.CopyToContainer(ctx, containerID, srcPath, containerToolsDir); err != nil {
+		return fmt.Errorf("copy %s to container: %w", fileName, err)
+	}
+
+	// 2. Discover tools via MCP protocol
+	binPath := filepath.Join(containerToolsDir, fileName)
+	tools, serverDesc, err := m.discoverTools(ctx, containerID, binPath, fileName)
+	if err != nil {
+		return fmt.Errorf("discover tools for %s: %w", serverName, err)
+	}
+
+	slog.Info("discovered MCP tools",
+		"server", serverName,
+		"tools_count", len(tools),
+	)
+
+	// 3. Write YAML to host toolsDir (which is bind-mounted as /workspace/.seaturt/tools/)
+	if err := m.writeToolsYAML(hostToolsDir, serverName, fileName, serverDesc, tools); err != nil {
+		return fmt.Errorf("write YAML for %s: %w", serverName, err)
+	}
+
+	return nil
+}
+
+// discoverTools runs a MCP server binary inside the container, performs the
+// initialize + tools/list handshake, and returns the discovered tool definitions.
+func (m *Manager) discoverTools(ctx context.Context, containerID, binPath, fileName string) ([]mcp.ToolDefinition, string, error) {
+	// Determine execution command based on file extension
+	var cmd []string
+	if strings.HasSuffix(fileName, ".py") {
+		cmd = []string{"python3", binPath}
+	} else {
+		cmd = []string{binPath}
+	}
+
+	discoverCtx, cancel := context.WithTimeout(ctx, containerMCPDiscoverTimeout)
+	defer cancel()
+
+	hijacked, err := m.docker.ExecStdio(discoverCtx, containerID, container.ExecAttachOptions{
+		Cmd: cmd,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("exec stdio for discover: %w", err)
+	}
+	defer hijacked.Close()
+
+	// Build ephemeral transport
+	transport := mcp.NewDiscoverTransport(hijacked)
+	defer transport.Close()
+
+	// Initialize handshake
+	initResult, err := transport.InitializeAndGetResult()
+	if err != nil {
+		return nil, "", fmt.Errorf("initialize: %w", err)
+	}
+
+	serverDesc := ""
+	if initResult != nil && initResult.ServerInfo.Name != "" {
+		serverDesc = initResult.ServerInfo.Name + " v" + initResult.ServerInfo.Version
+	}
+
+	// tools/list
+	tools, err := transport.ToolsList()
+	if err != nil {
+		return nil, "", fmt.Errorf("tools/list: %w", err)
+	}
+
+	return tools, serverDesc, nil
+}
+
+// writeToolsYAML generates a YAML file for the discovered MCP server and writes it to the host tools dir.
+func (m *Manager) writeToolsYAML(hostToolsDir, serverName, command, description string, tools []mcp.ToolDefinition) error {
+	if err := os.MkdirAll(hostToolsDir, 0755); err != nil {
+		return fmt.Errorf("mkdir tools dir: %w", err)
+	}
+
+	// Build YAML-friendly structure
+	type yamlTool struct {
+		Name        string         `yaml:"name"`
+		Description string         `yaml:"description"`
+		InputSchema map[string]any `yaml:"inputSchema,omitempty"`
+	}
+	type yamlServer struct {
+		Name        string     `yaml:"name"`
+		Command     string     `yaml:"command"`
+		Description string     `yaml:"description"`
+		Enabled     bool       `yaml:"enabled"`
+		Tools       []yamlTool `yaml:"tools"`
+	}
+
+	ysd := yamlServer{
+		Name:        serverName,
+		Command:     command,
+		Description: description,
+		Enabled:     true,
+		Tools:       make([]yamlTool, 0, len(tools)),
+	}
+
+	for _, t := range tools {
+		schema, _ := toMapStringAny(t.InputSchema)
+		ysd.Tools = append(ysd.Tools, yamlTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: schema,
+		})
+	}
+
+	data, err := yaml.Marshal(ysd)
+	if err != nil {
+		return fmt.Errorf("marshal yaml: %w", err)
+	}
+
+	yamlPath := filepath.Join(hostToolsDir, serverName+".yaml")
+	if err := os.WriteFile(yamlPath, data, 0644); err != nil {
+		return fmt.Errorf("write yaml: %w", err)
+	}
+
+	slog.Debug("wrote MCP tools YAML", "path", yamlPath, "tools", len(tools))
+	return nil
+}
+
+// deriveMCPServerName derives the MCP server name from a binary filename.
+// Rules:
+//  1. Remove "mcp-server-" prefix (if present)
+//  2. Remove file extension (.py, etc.)
+//
+// Examples:
+//
+//	"mcp-server-core"    → "core"
+//	"mcp-server-desktop" → "desktop"
+//	"my-custom-tool"     → "my-custom-tool"
+//	"web-search.py"      → "web-search"
+func deriveMCPServerName(fileName string) string {
+	name := fileName
+	// Remove file extension
+	ext := filepath.Ext(name)
+	if ext != "" {
+		name = strings.TrimSuffix(name, ext)
+	}
+	// Remove "mcp-server-" prefix
+	name = strings.TrimPrefix(name, "mcp-server-")
+	return name
+}
+
+// toMapStringAny converts an any value to map[string]any.
+func toMapStringAny(v any) (map[string]any, bool) {
+	if v == nil {
+		return nil, false
+	}
+	if m, ok := v.(map[string]any); ok {
+		return m, true
+	}
+	// Try JSON round-trip for types like map[string]interface{} from different packages
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, false
+	}
+	var result map[string]any
+	if err := json.Unmarshal(b, &result); err != nil {
+		return nil, false
+	}
+	return result, true
 }
 
 // generateID creates a unique agent ID.

@@ -37,6 +37,10 @@ type Config struct {
 
 	// 容器配置
 	Container ContainerConfig `yaml:"container" json:"container"`
+
+	// MCP Bins 目录（宿主机路径，存放预编译的 MCP Server 二进制/脚本）
+	// 默认为可执行文件所在目录下的 mcp-bins/
+	MCPBinsDir string `yaml:"mcp_bins_dir" json:"mcp_bins_dir"`
 }
 
 // ContainerConfig holds container-level configuration.
@@ -255,6 +259,29 @@ func findConfigFile() string {
 		}
 	}
 	return ""
+}
+
+// ServerDir returns the directory where the seaturt-server binary resides.
+// This is used to locate mcp-bins/ and other server-relative paths.
+func (c *Config) ServerDir() string {
+	if c.MCPBinsDir != "" {
+		return filepath.Dir(c.MCPBinsDir)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		// Fallback to working directory
+		wd, _ := os.Getwd()
+		return wd
+	}
+	return filepath.Dir(exe)
+}
+
+// GetMCPBinsDir returns the path to the MCP binaries directory.
+func (c *Config) GetMCPBinsDir() string {
+	if c.MCPBinsDir != "" {
+		return expandHome(c.MCPBinsDir)
+	}
+	return filepath.Join(c.ServerDir(), "mcp-bins")
 }
 
 func getEnv(key, fallback string) string {

@@ -193,6 +193,29 @@ func (r *ToolRegistry) Reload() error {
 	return r.LoadFromDir(dir)
 }
 
+// AddServer adds or updates a single server in the registry.
+// Thread-safe — acquires a write lock.
+// This is a hot-reload primitive: callers can add one server without
+// rebuilding the entire registry via LoadFromDir/Reload.
+func (r *ToolRegistry) AddServer(name string, def *ServerDef) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.servers[name] = def
+}
+
+// RemoveServer removes a single server from the registry.
+// Thread-safe — acquires a write lock.
+// Returns true if the server was found and removed.
+func (r *ToolRegistry) RemoveServer(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.servers[name]; !ok {
+		return false
+	}
+	delete(r.servers, name)
+	return true
+}
+
 // SplitToolName splits "mcpname-toolname" into server name and original tool name.
 // It splits on the first "-": core-shell_exec → ("core", "shell_exec").
 func SplitToolName(qualified string) (serverName, toolName string, err error) {

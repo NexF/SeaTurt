@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+SERVER_DIR="$PROJECT_ROOT/seaturt-server"
+WEB_DIR="$PROJECT_ROOT/seaturt-web"
+MCP_SERVERS_DIR="$SERVER_DIR/docker/sandbox/mcp-servers"
+EMBED_DIR="$SERVER_DIR/cmd/server/web/dist"
+
+# ---- Detect host platform ----
+detect_os() {
+    case "$(uname -s)" in
+        Linux*)  echo "linux" ;;
+        Darwin*) echo "darwin" ;;
+        MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
+        *)       echo "linux" ;;
+    esac
+}
+
+detect_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64)  echo "amd64" ;;
+        arm64|aarch64) echo "arm64" ;;
+        *)             echo "amd64" ;;
+    esac
+}
+
+# Defaults: current host platform
+BUILD_OS="${OS:-$(detect_os)}"
+BUILD_ARCH="${ARCH:-$(detect_arch)}"
+
+usage() {
+    cat <<EOF
+Usage: $0 [TARGET] [OPTIONS]
+
+Targets:
+  web       Build frontend only
+  server    Build backend only (supports cross-compilation)
+  mcp       Build MCP servers only (always linux, for Docker sandbox)
+  image     Build Docker sandbox image only
+  release   Full build: web + mcp + server + image (default)
+
+Options:
+  --os      Target OS: linux, darwin, windows (default: current host → $BUILD_OS)
+  --arch    Target arch: amd64, arm64 (default: current host → $BUILD_ARCH)
+
+Output layout:
+  seaturt-server/release/<os>_<arch>/seaturt[.exe]
+  seaturt-server/release/<os>_<arch>/mcp-bins/
+
+Notes:
+  - Each platform dir is self-contained: seaturt + mcp-bins/ side by side
+  - MCP servers compile for linux (they run inside Docker sandbox)
+  - Docker image is always linux/<arch>
+
+Examples:
+  $0                              # Build for current host (${BUILD_OS}/${BUILD_ARCH})
+  $0 server                      # Build server for current host
+  $0 server --os linux --arch amd64   # Cross-compile server for linux/amd64
+  $0 mcp --arch arm64            # Build MCP bins for linux/arm64
+  $0 release --os darwin --arch arm64 # Full build for macOS ARM
+EOF
+    exit 1
+}
+
+# ---- Argument parsing ----
+TARGET=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --os)
+            BUILD_OS="$2"
+            shift 2
+            ;;
+        --arch)
+            BUILD_ARCH="$2"
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            ;;
+        web|server|mcp|image|release)
+            TARGET="$1"
+            shift
+            ;;
+        *)
+            echo "Error: unknown argument '$1'"
+            usage
+            ;;
+    esac
+done
+TARGET="${TARGET:-release}"
+
+# Validate inputs
+case "$BUILD_OS" in
+    linux|darwin|windows) ;;
+    *) echo "Error: unsupported OS '$BUILD_OS' (use linux/darwin/windows)"; exit 1 ;;
+esac
+case "$BUILD_ARCH" in
+    amd64|arm64) ;;
+    *) echo "Error: unsupported arch '$BUILD_ARCH' (use amd64/arm64)"; exit 1 ;;
+esac
+
+# Platform-specific output directory: release/<os>_<arch>/
+PLATFORM_TAG="${BUILD_OS}_${BUILD_ARCH}"
+BUILD_DIR="$SERVER_DIR/release/$PLATFORM_TAG"
+MCP_BINS_DIR="$BUILD_DIR/mcp-bins"
+
+# Binary suffix
+EXT=""
+[[ "$BUILD_OS" == "windows" ]] && EXT=".exe"
+
+echo "==> Build config: target=$TARGET os=$BUILD_OS arch=$BUILD_ARCH"
+echo "    Output dir: $BUILD_DIR"
+
+# ---- Step 1: Frontend ----
+build_web() {
+    echo "==> Building frontend..."
+    cd "$WEB_DIR"
+    npm ci --prefer-offline 2>/dev/null || npm install
+    npm run build
+    rm -rf "$EMBED_DIR"
+    cp -r dist "$EMBED_DIR"
+    echo "    Frontend built → $EMBED_DIR"
+}
+
+# ---- Step 2: Backend server ----
+build_server() {
+    echo "==> Building server (GOOS=$BUILD_OS GOARCH=$BUILD_ARCH)..."
+    cd "$SERVER_DIR"
+    mkdir -p "$BUILD_DIR"
+    CGO_ENABLED=0 GOOS="$BUILD_OS" GOARCH="$BUILD_ARCH" \
+        go build -ldflags="-s -w" -o "$BUILD_DIR/seaturt${EXT}" ./cmd/server/
+
+    # Copy config.yaml if exists
+    if [[ -f "$SERVER_DIR/config.yaml" ]]; then
+        cp "$SERVER_DIR/config.yaml" "$BUILD_DIR/config.yaml"
+        echo "    Config copied → $BUILD_DIR/config.yaml"
+    fi
+
+    # Copy Docker sandbox files into release dir
+    local DOCKER_SRC="$SERVER_DIR/docker/sandbox"
+    local DOCKER_DST="$BUILD_DIR/docker"
+    mkdir -p "$DOCKER_DST"
+    cp "$DOCKER_SRC/Dockerfile" "$DOCKER_DST/Dockerfile"
+    cp "$DOCKER_SRC/svc-selkies-run" "$DOCKER_DST/svc-selkies-run"
+    echo "    Docker files copied → $DOCKER_DST/"
+
+    # Generate setup.sh for end users
+    cat > "$BUILD_DIR/setup.sh" <<'SETUP_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "==> Building Docker sandbox image..."
+docker build -t seaturt/sandbox:latest "$SCRIPT_DIR/docker/"
+echo "    Done: seaturt/sandbox:latest"
+
+echo ""
+echo "==> Setup complete! Start seaturt with:"
+echo "    cd $SCRIPT_DIR && ./seaturt"
+SETUP_EOF
+    chmod +x "$BUILD_DIR/setup.sh"
+    echo "    setup.sh generated → $BUILD_DIR/setup.sh"
+
+    echo "    Server built → $BUILD_DIR/seaturt${EXT}"
+}
+
+# ---- Step 3: MCP Servers (always linux) ----
+build_mcp() {
+    echo "==> Building MCP servers (GOOS=linux GOARCH=$BUILD_ARCH)..."
+    mkdir -p "$MCP_BINS_DIR"
+
+    # Build Go-based MCP servers
+    for dir in "$MCP_SERVERS_DIR"/*/; do
+        [ -d "$dir" ] || continue
+        [ -f "$dir/go.mod" ] || continue
+        name=$(basename "$dir")
+        echo "    -> mcp-server-$name"
+        (
+            cd "$dir"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$BUILD_ARCH" \
+                go build -ldflags="-s -w" -o "$MCP_BINS_DIR/mcp-server-$name" .
+        )
+    done
+
+    # Copy Python MCP scripts (if any exist at top level of mcp-servers/)
+    for f in "$MCP_SERVERS_DIR"/*.py; do
+        [ -f "$f" ] || continue
+        cp "$f" "$MCP_BINS_DIR/"
+        echo "    -> $(basename "$f") (python)"
+    done
+
+    echo "    MCP bins → $MCP_BINS_DIR:"
+    ls -lh "$MCP_BINS_DIR/" 2>/dev/null || echo "    (empty)"
+}
+
+# ---- Step 4: Docker sandbox image ----
+build_image() {
+    echo "==> Building Docker image (platform=linux/$BUILD_ARCH)..."
+    cd "$SERVER_DIR"
+    docker build --platform "linux/$BUILD_ARCH" \
+        -t seaturt/sandbox:latest \
+        ./docker/sandbox/
+    echo "    Docker image built: seaturt/sandbox:latest"
+}
+
+# ---- Dispatch ----
+case "$TARGET" in
+    web)     build_web ;;
+    server)  build_server ;;
+    mcp)     build_mcp ;;
+    image)   build_image ;;
+    release) build_web; build_mcp; build_server; build_image ;;
+esac
+
+echo "==> Done! (os=$BUILD_OS arch=$BUILD_ARCH target=$TARGET)"

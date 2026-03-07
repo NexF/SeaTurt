@@ -26,21 +26,23 @@ func toolScreenshot(args map[string]any) CallToolResult {
 	var cmd *exec.Cmd
 
 	// Check if a region is specified
-	if region, ok := args["region"].(map[string]any); ok {
-		x := toInt(region["x"])
-		y := toInt(region["y"])
-		w := toInt(region["width"])
-		h := toInt(region["height"])
-		if w > 0 && h > 0 {
-			// Use import (ImageMagick) for region capture
-			geometry := fmt.Sprintf("%dx%d+%d+%d", w, h, x, y)
-			cmd = exec.Command("import", "-display", disp, "-window", "root",
-				"-crop", geometry, tmpFile)
+	var regionOffX, regionOffY int
+	if args != nil {
+		if region, ok := args["region"].(map[string]any); ok {
+			x := toInt(region["x"])
+			y := toInt(region["y"])
+			w := toInt(region["width"])
+			h := toInt(region["height"])
+			if w > 0 && h > 0 {
+				regionOffX, regionOffY = x, y
+				geometry := fmt.Sprintf("%dx%d+%d+%d", w, h, x, y)
+				cmd = exec.Command("import", "-display", disp, "-window", "root",
+					"-crop", geometry, tmpFile)
+			}
 		}
 	}
 
 	if cmd == nil {
-		// Full screen capture using import
 		cmd = exec.Command("import", "-display", disp, "-window", "root", tmpFile)
 	}
 
@@ -50,7 +52,29 @@ func toolScreenshot(args map[string]any) CallToolResult {
 		return errorResult(fmt.Sprintf("screenshot failed: %v\n%s", err, string(output)))
 	}
 
-	// Read and encode the screenshot
+	// Overlay coordinate grid to help the LLM estimate click positions.
+	// Controlled by "show_grid" param (default: true).
+	showGrid := true
+	if args != nil {
+		if v, ok := args["show_grid"]; ok {
+			switch g := v.(type) {
+			case bool:
+				showGrid = g
+			case string:
+				showGrid = g != "false" && g != "0"
+			}
+		}
+	}
+
+	if showGrid {
+		gridFile := tmpFile + ".grid.png"
+		defer os.Remove(gridFile)
+		if err := overlayGrid(tmpFile, gridFile, regionOffX, regionOffY); err == nil {
+			tmpFile = gridFile
+		}
+		// If grid overlay fails, fall through and return the plain screenshot.
+	}
+
 	data, err := os.ReadFile(tmpFile)
 	if err != nil {
 		return errorResult(fmt.Sprintf("read screenshot: %v", err))
@@ -60,6 +84,73 @@ func toolScreenshot(args map[string]any) CallToolResult {
 	return CallToolResult{
 		Content: []ToolContent{{Type: "image", Data: encoded, MimeType: "image/png"}},
 	}
+}
+
+// overlayGrid draws a coordinate grid on the screenshot using ImageMagick.
+// gridStep controls the pixel interval between lines (default 100px).
+// regionOffX/Y are the absolute desktop offsets of the captured region so
+// that labels show real desktop coordinates the LLM can use directly.
+func overlayGrid(srcPath, dstPath string, regionOffX, regionOffY int) error {
+	const gridStep = 100
+
+	// Get image dimensions via `identify`
+	idOut, err := exec.Command("identify", "-format", "%w %h", srcPath).Output()
+	if err != nil {
+		return err
+	}
+	parts := strings.Fields(strings.TrimSpace(string(idOut)))
+	if len(parts) != 2 {
+		return fmt.Errorf("unexpected identify output: %s", string(idOut))
+	}
+	imgW, _ := strconv.Atoi(parts[0])
+	imgH, _ := strconv.Atoi(parts[1])
+	if imgW == 0 || imgH == 0 {
+		return fmt.Errorf("zero dimension: %dx%d", imgW, imgH)
+	}
+
+	// Build ImageMagick draw commands:
+	//  - semi-transparent grid lines every gridStep pixels
+	//  - coordinate labels at intersections
+	var draws []string
+
+	// Grid lines (thin, semi-transparent)
+	draws = append(draws, "stroke rgba(255,0,0,0.35)", "stroke-width 1", "fill none")
+	for x := gridStep; x < imgW; x += gridStep {
+		draws = append(draws, fmt.Sprintf("line %d,0 %d,%d", x, x, imgH))
+	}
+	for y := gridStep; y < imgH; y += gridStep {
+		draws = append(draws, fmt.Sprintf("line 0,%d %d,%d", y, imgW, y))
+	}
+
+	// Coordinate labels at intersections
+	draws = append(draws, "stroke none", "fill rgba(255,0,0,0.7)", "font-size 11")
+	for x := gridStep; x < imgW; x += gridStep {
+		for y := gridStep; y < imgH; y += gridStep {
+			absX := x + regionOffX
+			absY := y + regionOffY
+			label := fmt.Sprintf("%d,%d", absX, absY)
+			// Place label slightly offset from intersection
+			draws = append(draws, fmt.Sprintf("text %d,%d '%s'", x+2, y-3, label))
+		}
+	}
+
+	// Axis labels along edges (top row x, left col y)
+	for x := gridStep; x < imgW; x += gridStep {
+		absX := x + regionOffX
+		draws = append(draws, fmt.Sprintf("text %d,12 '%d'", x+2, absX))
+	}
+	for y := gridStep; y < imgH; y += gridStep {
+		absY := y + regionOffY
+		draws = append(draws, fmt.Sprintf("text 2,%d '%d'", y-3, absY))
+	}
+
+	drawStr := strings.Join(draws, " ")
+	cmd := exec.Command("convert", srcPath, "-draw", drawStr, dstPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, string(out))
+	}
+	return nil
 }
 
 func toolMouseClick(args map[string]any) CallToolResult {

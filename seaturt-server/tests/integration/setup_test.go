@@ -14,6 +14,8 @@ import (
 	"github.com/seaturt/server/internal/container"
 	"github.com/seaturt/server/internal/mcp"
 	"github.com/seaturt/server/internal/store"
+
+	"gopkg.in/yaml.v3"
 )
 
 const testImage = "seaturt/sandbox:test"
@@ -84,8 +86,8 @@ func TestMain(m *testing.M) {
 }
 
 // createTestContainer creates a running test container with a temp workspace,
-// writes builtin tool YAML definitions, and copies MCP server binaries from
-// the container staging directory to workspace/.seaturt/tools/.
+// copies MCP server binaries from the container staging directory to
+// workspace/.seaturt/tools/, and discovers tools via MCP protocol to generate YAML.
 // This mirrors the full agent initialization flow in manager.Create().
 func createTestContainer(t *testing.T) (containerID string, workspacePath string) {
 	t.Helper()
@@ -110,11 +112,11 @@ func createTestContainer(t *testing.T) (containerID string, workspacePath string
 		t.Fatalf("start container: %v", err)
 	}
 
-	// Write builtin tool YAML definitions to host workspace (bind-mounted into container)
+	// Create tools directory
 	toolsDir := filepath.Join(workspacePath, ".seaturt", "tools")
-	if err := mcp.WriteBuiltinTools(toolsDir, nil); err != nil {
+	if err := os.MkdirAll(toolsDir, 0755); err != nil {
 		dockerMgr.RemoveContainer(ctx, id)
-		t.Fatalf("write builtin tools: %v", err)
+		t.Fatalf("create tools dir: %v", err)
 	}
 
 	// Copy MCP server binaries from container staging dir to workspace tools dir
@@ -131,6 +133,84 @@ func createTestContainer(t *testing.T) (containerID string, workspacePath string
 	if result.ExitCode != 0 {
 		dockerMgr.RemoveContainer(ctx, id)
 		t.Fatalf("copy mcp binaries failed (exit %d): %s", result.ExitCode, result.Stderr)
+	}
+
+	// Discover tools from each MCP server and write YAML
+	for _, mcpName := range []string{"mcp-server-core", "mcp-server-desktop"} {
+		binPath := filepath.Join(containerToolsDir, mcpName)
+		cmd := []string{binPath}
+
+		discoverCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		hijacked, err := dockerMgr.ExecStdio(discoverCtx, id, container.ExecAttachOptions{Cmd: cmd})
+		if err != nil {
+			cancel()
+			t.Logf("WARN: failed to discover %s: %v", mcpName, err)
+			continue
+		}
+
+		transport := mcp.NewDiscoverTransport(hijacked)
+		initResult, err := transport.InitializeAndGetResult()
+		if err != nil {
+			transport.Close()
+			cancel()
+			t.Logf("WARN: failed to initialize %s: %v", mcpName, err)
+			continue
+		}
+
+		tools, err := transport.ToolsList()
+		transport.Close()
+		cancel()
+		if err != nil {
+			t.Logf("WARN: failed to list tools for %s: %v", mcpName, err)
+			continue
+		}
+
+		// Derive server name
+		serverName := mcpName
+		if len(serverName) > len("mcp-server-") {
+			serverName = serverName[len("mcp-server-"):]
+		}
+
+		// Write YAML
+		type yamlTool struct {
+			Name        string         `yaml:"name"`
+			Description string         `yaml:"description"`
+			InputSchema map[string]any `yaml:"inputSchema,omitempty"`
+		}
+		type yamlServer struct {
+			Name        string     `yaml:"name"`
+			Command     string     `yaml:"command"`
+			Description string     `yaml:"description"`
+			Enabled     bool       `yaml:"enabled"`
+			Tools       []yamlTool `yaml:"tools"`
+		}
+
+		desc := ""
+		if initResult != nil {
+			desc = initResult.ServerInfo.Name
+		}
+
+		ysd := yamlServer{
+			Name:    serverName,
+			Command: mcpName,
+			Description: desc,
+			Enabled: true,
+			Tools:   make([]yamlTool, 0, len(tools)),
+		}
+		for _, tool := range tools {
+			schema, _ := tool.InputSchema.(map[string]any)
+			ysd.Tools = append(ysd.Tools, yamlTool{
+				Name:        tool.Name,
+				Description: tool.Description,
+				InputSchema: schema,
+			})
+		}
+
+		data, _ := yaml.Marshal(ysd)
+		yamlPath := filepath.Join(toolsDir, serverName+".yaml")
+		if err := os.WriteFile(yamlPath, data, 0644); err != nil {
+			t.Logf("WARN: failed to write YAML for %s: %v", serverName, err)
+		}
 	}
 
 	// Give container a moment to initialize
