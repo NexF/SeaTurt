@@ -10,12 +10,19 @@ import (
 	"time"
 )
 
-const display = ":99"
+// getDisplay returns the X11 display. LinuxServer Webtop (Selkies) uses :1.
+func getDisplay() string {
+	if d := os.Getenv("DISPLAY"); d != "" {
+		return d
+	}
+	return ":1"
+}
 
 func toolScreenshot(args map[string]any) CallToolResult {
 	tmpFile := fmt.Sprintf("/tmp/screenshot_%d.png", time.Now().UnixNano())
 	defer os.Remove(tmpFile)
 
+	disp := getDisplay()
 	var cmd *exec.Cmd
 
 	// Check if a region is specified
@@ -27,17 +34,17 @@ func toolScreenshot(args map[string]any) CallToolResult {
 		if w > 0 && h > 0 {
 			// Use import (ImageMagick) for region capture
 			geometry := fmt.Sprintf("%dx%d+%d+%d", w, h, x, y)
-			cmd = exec.Command("import", "-display", display, "-window", "root",
+			cmd = exec.Command("import", "-display", disp, "-window", "root",
 				"-crop", geometry, tmpFile)
 		}
 	}
 
 	if cmd == nil {
 		// Full screen capture using import
-		cmd = exec.Command("import", "-display", display, "-window", "root", tmpFile)
+		cmd = exec.Command("import", "-display", disp, "-window", "root", tmpFile)
 	}
 
-	cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	cmd.Env = append(os.Environ(), "DISPLAY="+disp)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return errorResult(fmt.Sprintf("screenshot failed: %v\n%s", err, string(output)))
@@ -72,9 +79,10 @@ func toolMouseClick(args map[string]any) CallToolResult {
 	}
 
 	// Move to position first, then click
+	disp := getDisplay()
 	cmd := exec.Command("xdotool", "mousemove", "--sync",
 		strconv.Itoa(x), strconv.Itoa(y), "click", button)
-	cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	cmd.Env = append(os.Environ(), "DISPLAY="+disp)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return errorResult(fmt.Sprintf("mouse_click failed: %v\n%s", err, string(output)))
@@ -87,9 +95,10 @@ func toolMouseMove(args map[string]any) CallToolResult {
 	x := toInt(args["x"])
 	y := toInt(args["y"])
 
+	disp := getDisplay()
 	cmd := exec.Command("xdotool", "mousemove", "--sync",
 		strconv.Itoa(x), strconv.Itoa(y))
-	cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	cmd.Env = append(os.Environ(), "DISPLAY="+disp)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return errorResult(fmt.Sprintf("mouse_move failed: %v\n%s", err, string(output)))
@@ -112,9 +121,10 @@ func toolMouseDrag(args map[string]any) CallToolResult {
 		{"xdotool", "mouseup", "1"},
 	}
 
+	disp := getDisplay()
 	for _, cmdArgs := range cmds {
 		cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-		cmd.Env = append(os.Environ(), "DISPLAY="+display)
+		cmd.Env = append(os.Environ(), "DISPLAY="+disp)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return errorResult(fmt.Sprintf("mouse_drag failed: %v\n%s", err, string(output)))
 		}
@@ -129,8 +139,9 @@ func toolKeyboardType(args map[string]any) CallToolResult {
 		return errorResult("missing or invalid 'text' argument")
 	}
 
+	disp := getDisplay()
 	cmd := exec.Command("xdotool", "type", "--clearmodifiers", "--delay", "50", text)
-	cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	cmd.Env = append(os.Environ(), "DISPLAY="+disp)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return errorResult(fmt.Sprintf("keyboard_type failed: %v\n%s", err, string(output)))
@@ -146,8 +157,9 @@ func toolKeyboardKey(args map[string]any) CallToolResult {
 	}
 
 	// xdotool uses '+' for key combos (e.g. "ctrl+c")
+	disp := getDisplay()
 	cmd := exec.Command("xdotool", "key", "--clearmodifiers", key)
-	cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	cmd.Env = append(os.Environ(), "DISPLAY="+disp)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return errorResult(fmt.Sprintf("keyboard_key failed: %v\n%s", err, string(output)))
@@ -157,8 +169,9 @@ func toolKeyboardKey(args map[string]any) CallToolResult {
 }
 
 func toolWindowList(args map[string]any) CallToolResult {
+	disp := getDisplay()
 	cmd := exec.Command("wmctrl", "-l")
-	cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	cmd.Env = append(os.Environ(), "DISPLAY="+disp)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return errorResult(fmt.Sprintf("window_list failed: %v\n%s", err, string(output)))
@@ -172,9 +185,10 @@ func toolWindowList(args map[string]any) CallToolResult {
 }
 
 func toolWindowFocus(args map[string]any) CallToolResult {
+	disp := getDisplay()
 	if windowID, ok := args["window_id"].(string); ok && windowID != "" {
 		cmd := exec.Command("xdotool", "windowactivate", windowID)
-		cmd.Env = append(os.Environ(), "DISPLAY="+display)
+		cmd.Env = append(os.Environ(), "DISPLAY="+disp)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return errorResult(fmt.Sprintf("window_focus by id failed: %v\n%s", err, string(output)))
@@ -185,7 +199,7 @@ func toolWindowFocus(args map[string]any) CallToolResult {
 	if title, ok := args["title"].(string); ok && title != "" {
 		// Use wmctrl to find and activate by title
 		cmd := exec.Command("wmctrl", "-a", title)
-		cmd.Env = append(os.Environ(), "DISPLAY="+display)
+		cmd.Env = append(os.Environ(), "DISPLAY="+disp)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return errorResult(fmt.Sprintf("window_focus by title failed: %v\n%s", err, string(output)))
@@ -202,18 +216,28 @@ func toolOpenApp(args map[string]any) CallToolResult {
 		return errorResult("missing or invalid 'app' argument")
 	}
 
-	// Try gtk-launch first, fall back to direct execution
-	cmd := exec.Command("sh", "-c", fmt.Sprintf(
-		"DISPLAY=%s gtk-launch %s 2>/dev/null || DISPLAY=%s %s &",
-		display, app, display, app))
-	cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	disp := getDisplay()
+
+	// Launch the app in a fully detached session (setsid) so it survives
+	// independently. Capture stderr to a temp file so we can report
+	// startup errors instead of silently swallowing them.
+	errFile := fmt.Sprintf("/tmp/open_app_%d.err", time.Now().UnixNano())
+	defer os.Remove(errFile)
+
+	shellCmd := fmt.Sprintf(
+		"setsid %s </dev/null >/dev/null 2>%s &\nSPID=$!\nsleep 1\nif ! kill -0 $SPID 2>/dev/null; then\n  cat %s\n  exit 1\nfi",
+		app, errFile, errFile,
+	)
+	cmd := exec.Command("sh", "-c", shellCmd)
+	cmd.Env = append(os.Environ(), "DISPLAY="+disp)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return errorResult(fmt.Sprintf("open_app failed: %v\n%s", err, string(output)))
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return errorResult(fmt.Sprintf("open_app failed: %s", msg))
 	}
-
-	// Give the app a moment to start
-	time.Sleep(500 * time.Millisecond)
 
 	return textResult(fmt.Sprintf("launched: %s", app))
 }
