@@ -1,11 +1,20 @@
 import { create } from "zustand"
-import { ChatMessage, ChatSegment, UIToolCall, ContentBlock, Message } from "@/types"
+import { ChatMessage, UIToolCall, ContentBlock, Message } from "@/types"
 import * as api from "@/services/api"
 
-interface ChatStore {
+interface PerAgentState {
   messages: ChatMessage[]
   isStreaming: boolean
   abortController: AbortController | null
+}
+
+interface ChatStore {
+  /** Per-agent chat state keyed by agent ID */
+  agentStates: Record<string, PerAgentState>
+
+  /** Helpers to read per-agent state */
+  getMessages: (agentId: string) => ChatMessage[]
+  getIsStreaming: (agentId: string) => boolean
 
   loadHistory: (agentId: string) => Promise<void>
   clearHistory: (agentId: string) => Promise<void>
@@ -15,10 +24,22 @@ interface ChatStore {
   reset: () => void
 }
 
+const emptyState: PerAgentState = { messages: [], isStreaming: false, abortController: null }
+
+function getAgentState(states: Record<string, PerAgentState>, agentId: string): PerAgentState {
+  return states[agentId] || emptyState
+}
+
+function setAgentState(
+  states: Record<string, PerAgentState>,
+  agentId: string,
+  patch: Partial<PerAgentState>
+): Record<string, PerAgentState> {
+  const prev = states[agentId] || { ...emptyState }
+  return { ...states, [agentId]: { ...prev, ...patch } }
+}
+
 // Convert a sequence of history Messages into ChatMessages with proper segments.
-// The backend stores: user, assistant (with tool_calls), tool, ..., assistant (final).
-// We merge consecutive assistant+tool sequences into a single ChatMessage bubble
-// to match the streaming behavior.
 function convertHistoryMessages(msgs: Message[]): ChatMessage[] {
   const result: ChatMessage[] = []
   let currentAssistant: ChatMessage | null = null
@@ -70,8 +91,12 @@ function convertHistoryMessages(msgs: Message[]): ChatMessage[] {
         isStreaming: false,
       })
     } else if (msg.role === "assistant") {
-      // Merge into current assistant bubble (don't flush — keeps multi-iteration in one bubble)
       const assistant = ensureAssistant(msg)
+
+      if (msg.reasoning_content) {
+        assistant.reasoningContent = (assistant.reasoningContent || "") + msg.reasoning_content
+        assistant.segments!.push({ type: "reasoning", text: msg.reasoning_content })
+      }
 
       let text = ""
       if (typeof msg.content === "string") {
@@ -88,7 +113,6 @@ function convertHistoryMessages(msgs: Message[]): ChatMessage[] {
         assistant.segments!.push({ type: "text", text })
       }
 
-      // If this assistant message has tool_calls, add them to segments
       if (msg.tool_calls) {
         try {
           const tcs = JSON.parse(msg.tool_calls) as Array<{
@@ -109,7 +133,6 @@ function convertHistoryMessages(msgs: Message[]): ChatMessage[] {
         } catch {}
       }
     } else if (msg.role === "tool") {
-      // Match this tool result to the current assistant's toolCalls
       const cur = currentAssistant as ChatMessage | null
       if (cur && cur.toolCalls) {
         const tc = cur.toolCalls.find((t: UIToolCall) => t.id === msg.tool_call_id)
@@ -134,30 +157,35 @@ function convertHistoryMessages(msgs: Message[]): ChatMessage[] {
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
-  messages: [],
-  isStreaming: false,
-  abortController: null,
+  agentStates: {},
+
+  getMessages: (agentId) => getAgentState(get().agentStates, agentId).messages,
+  getIsStreaming: (agentId) => getAgentState(get().agentStates, agentId).isStreaming,
 
   loadHistory: async (agentId) => {
-    const { abortController } = get()
-    if (abortController) {
-      api.cancelChat(agentId).catch(() => {})
-      abortController.abort()
-    }
-    set({ messages: [], isStreaming: false, abortController: null })
+    const state = getAgentState(get().agentStates, agentId)
+    // If already streaming for this agent, don't reload — keep current state
+    if (state.isStreaming) return
+
+    // If already has messages loaded, don't re-fetch (component just re-showed)
+    if (state.messages.length > 0) return
+
+    set((s) => ({ agentStates: setAgentState(s.agentStates, agentId, { messages: [] }) }))
     try {
       const history = await api.getHistory(agentId)
       const msgs = convertHistoryMessages(history)
-      set({ messages: msgs })
+      set((s) => ({ agentStates: setAgentState(s.agentStates, agentId, { messages: msgs }) }))
     } catch (err) {
       console.warn("Failed to load history:", err)
-      set({ messages: [] })
+      set((s) => ({ agentStates: setAgentState(s.agentStates, agentId, { messages: [] }) }))
     }
   },
 
   clearHistory: async (agentId) => {
     await api.deleteHistory(agentId)
-    set({ messages: [] })
+    set((s) => ({
+      agentStates: setAgentState(s.agentStates, agentId, { messages: [] }),
+    }))
   },
 
   sendMessage: (agentId, text, images) => {
@@ -185,30 +213,47 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       isStreaming: true,
     }
 
-    set((s) => ({
-      messages: [...s.messages, userMsg, assistantMsg],
-      isStreaming: true,
-    }))
+    set((s) => {
+      const prev = getAgentState(s.agentStates, agentId)
+      return {
+        agentStates: setAgentState(s.agentStates, agentId, {
+          messages: [...prev.messages, userMsg, assistantMsg],
+          isStreaming: true,
+        }),
+      }
+    })
 
     const controller = api.streamChat(
       agentId,
       { text, images },
       (event) => {
         set((s) => {
-          const msgs = [...s.messages]
+          const prev = getAgentState(s.agentStates, agentId)
+          const msgs = [...prev.messages]
           const last = { ...msgs[msgs.length - 1] }
           msgs[msgs.length - 1] = last
 
-          // Clone mutable arrays
           const segments = [...(last.segments || [])]
           const toolCalls = [...(last.toolCalls || [])]
 
           switch (event.type) {
+            case "reasoning_delta": {
+              const delta = event.data as { content: string }
+              last.reasoningContent = (last.reasoningContent || "") + delta.content
+              const lastSeg = segments[segments.length - 1]
+              if (lastSeg && lastSeg.type === "reasoning") {
+                segments[segments.length - 1] = {
+                  type: "reasoning",
+                  text: lastSeg.text + delta.content,
+                }
+              } else {
+                segments.push({ type: "reasoning", text: delta.content })
+              }
+              break
+            }
             case "text_delta": {
               const delta = event.data as { content: string }
               last.content += delta.content
-
-              // Append to the last text segment, or create a new one
               const lastSeg = segments[segments.length - 1]
               if (lastSeg && lastSeg.type === "text") {
                 segments[segments.length - 1] = {
@@ -246,7 +291,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                   isError: tr.is_error,
                   isComplete: true,
                 }
-                // Also update the reference in segments
                 const segIdx = segments.findIndex(
                   (seg) => seg.type === "tool_call" && seg.toolCall.id === tr.tool_call_id
                 )
@@ -276,7 +320,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               break
             }
             case "cancelled": {
-              // 后端已取消整轮对话，标记所有未完成的 tool calls
               for (let i = 0; i < toolCalls.length; i++) {
                 if (!toolCalls[i].isComplete) {
                   toolCalls[i] = {
@@ -287,7 +330,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                   }
                 }
               }
-              // 同步更新 segments 中对应的 tool calls
               for (let i = 0; i < segments.length; i++) {
                 const seg = segments[i]
                 if (seg.type === "tool_call" && !seg.toolCall.isComplete) {
@@ -304,45 +346,54 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
           last.segments = segments
           last.toolCalls = toolCalls
-          return { messages: msgs }
+          return { agentStates: setAgentState(s.agentStates, agentId, { ...prev, messages: msgs }) }
         })
       },
-      () => set({ isStreaming: false, abortController: null }),
+      () => {
+        set((s) => ({
+          agentStates: setAgentState(s.agentStates, agentId, { isStreaming: false, abortController: null }),
+        }))
+      },
       (err) => {
         console.error("Stream error:", err)
         set((s) => {
-          const msgs = [...s.messages]
+          const prev = getAgentState(s.agentStates, agentId)
+          const msgs = [...prev.messages]
           if (msgs.length > 0) {
             const last = { ...msgs[msgs.length - 1] }
             last.content += `\n\n**Error:** ${err.message}`
             last.isStreaming = false
             msgs[msgs.length - 1] = last
           }
-          return { messages: msgs, isStreaming: false, abortController: null }
+          return {
+            agentStates: setAgentState(s.agentStates, agentId, {
+              messages: msgs,
+              isStreaming: false,
+              abortController: null,
+            }),
+          }
         })
       }
     )
 
-    set({ abortController: controller })
+    set((s) => ({
+      agentStates: setAgentState(s.agentStates, agentId, { abortController: controller }),
+    }))
   },
 
   stopStreaming: (agentId) => {
-    const { abortController } = get()
-    if (!abortController) return
+    const state = getAgentState(get().agentStates, agentId)
+    if (!state.abortController) return
 
-    // 1. 通知后端取消（先于 abort，因为 abort 会立刻断开 SSE）
     api.cancelChat(agentId).catch(() => {})
+    state.abortController.abort()
 
-    // 2. abort 前端 SSE 连接
-    abortController.abort()
-
-    // 3. 更新 UI 状态
     set((s) => {
-      const msgs = [...s.messages]
+      const prev = getAgentState(s.agentStates, agentId)
+      const msgs = [...prev.messages]
       if (msgs.length > 0) {
         const last = { ...msgs[msgs.length - 1] }
         last.isStreaming = false
-        // 兜底标记未完成的 tool calls 为已取消
         if (last.toolCalls?.length) {
           last.toolCalls = last.toolCalls.map(tc =>
             tc.isComplete ? tc : { ...tc, isComplete: true, isError: true, result: [{ type: "text", text: "已取消" }] }
@@ -357,17 +408,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
         msgs[msgs.length - 1] = last
       }
-      return { messages: msgs, isStreaming: false, abortController: null }
+      return {
+        agentStates: setAgentState(s.agentStates, agentId, {
+          messages: msgs,
+          isStreaming: false,
+          abortController: null,
+        }),
+      }
     })
   },
 
   cancelToolCall: (agentId, toolCallId) => {
-    // 通知后端取消此 tool call（不断 SSE，agent 继续推理）
     api.cancelToolCall(agentId, toolCallId).catch(() => {})
 
-    // 乐观更新 UI：立即标记此 tool call 为取消状态
     set((s) => {
-      const msgs = [...s.messages]
+      const prev = getAgentState(s.agentStates, agentId)
+      const msgs = [...prev.messages]
       const last = { ...msgs[msgs.length - 1] }
       if (last.toolCalls) {
         last.toolCalls = last.toolCalls.map(tc =>
@@ -384,9 +440,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         )
       }
       msgs[msgs.length - 1] = last
-      return { messages: msgs }
+      return { agentStates: setAgentState(s.agentStates, agentId, { ...prev, messages: msgs }) }
     })
   },
 
-  reset: () => set({ messages: [], isStreaming: false, abortController: null }),
+  reset: () => set({ agentStates: {} }),
 }))

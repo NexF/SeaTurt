@@ -1,9 +1,10 @@
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { useState } from "react"
 import { ChatMessage } from "@/types"
 import { cn } from "@/lib/utils"
 import ToolCallBlock from "./ToolCallBlock"
-import { Loader2 } from "lucide-react"
+import { Loader2, ChevronRight, ChevronDown, Brain } from "lucide-react"
 
 interface Props {
   message: ChatMessage
@@ -39,10 +40,13 @@ export default function MessageBubble({ message, agentId }: Props) {
           </div>
         )}
 
-        {/* Ordered segments: interleaved text + tool calls */}
+        {/* Ordered segments: interleaved text + reasoning + tool calls */}
         {!isUser && hasSegments ? (
           <div className="space-y-2">
             {message.segments!.map((seg, i) => {
+              if (seg.type === "reasoning") {
+                return <ReasoningBlock key={i} text={seg.text} isStreaming={!!message.isStreaming} />
+              }
               if (seg.type === "text") {
                 return (
                   <div key={i} className="text-sm prose prose-sm dark:prose-invert max-w-none prose-pre:bg-[hsl(240,23%,9%)] prose-pre:rounded-lg prose-code:text-primary">
@@ -81,6 +85,33 @@ export default function MessageBubble({ message, agentId }: Props) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ReasoningBlock renders a collapsible "thinking process" section.
+// Auto-expands during streaming, collapses when streaming ends.
+function ReasoningBlock({ text, isStreaming }: { text: string; isStreaming: boolean }) {
+  const [manualToggle, setManualToggle] = useState<boolean | null>(null)
+  const isOpen = manualToggle !== null ? manualToggle : isStreaming
+
+  return (
+    <div className="border border-border/50 rounded-lg overflow-hidden">
+      <button
+        type="button"
+        className="flex items-center gap-1.5 w-full px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/50 transition-colors"
+        onClick={() => setManualToggle(isOpen ? false : true)}
+      >
+        <Brain className="h-3 w-3 shrink-0" />
+        <span>思考过程</span>
+        {isStreaming && <Loader2 className="h-3 w-3 animate-spin ml-1" />}
+        {isOpen ? <ChevronDown className="h-3 w-3 ml-auto" /> : <ChevronRight className="h-3 w-3 ml-auto" />}
+      </button>
+      {isOpen && (
+        <div className="px-3 pb-2 text-xs text-muted-foreground/80 prose prose-sm dark:prose-invert max-w-none border-t border-border/30">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+        </div>
+      )}
     </div>
   )
 }

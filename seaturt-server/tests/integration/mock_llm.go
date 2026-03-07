@@ -62,7 +62,7 @@ func (m *MockLLMServer) SetRequestCapture(fn func(body []byte)) {
 
 // NewClient creates an LLM client pointing to this mock server.
 func (m *MockLLMServer) NewClient() *llm.Client {
-	return llm.NewClient(m.server.URL, "test-key", "test-model", "openai-completions", nil)
+	return llm.NewClient(m.server.URL, "test-key", "test-model", "openai-completions", nil, nil)
 }
 
 // mockChatRequest is used to decode the incoming request (wire format).

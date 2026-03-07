@@ -184,11 +184,48 @@ build_mcp() {
         )
     done
 
-    # Copy Python MCP scripts (if any exist at top level of mcp-servers/)
-    for f in "$MCP_SERVERS_DIR"/*.py; do
-        [ -f "$f" ] || continue
-        cp "$f" "$MCP_BINS_DIR/"
-        echo "    -> $(basename "$f") (python)"
+    # Build Python-based MCP servers (PyInstaller → single binary)
+    # PyInstaller cannot cross-compile — it packages native .so libs from the current OS.
+    # If host is not linux (or arch mismatches), we use Docker to build inside a linux container.
+    HOST_OS="$(detect_os)"
+    HOST_ARCH="$(detect_arch)"
+    NEED_DOCKER_BUILD=false
+    if [[ "$HOST_OS" != "linux" ]]; then
+        echo "    [INFO] Host is $HOST_OS, will use Docker to build Python MCP servers for linux/$BUILD_ARCH"
+        NEED_DOCKER_BUILD=true
+    elif [[ "$HOST_ARCH" != "$BUILD_ARCH" ]]; then
+        echo "    [INFO] Host arch is $HOST_ARCH but target is $BUILD_ARCH, will use Docker to build"
+        NEED_DOCKER_BUILD=true
+    fi
+
+    for dir in "$MCP_SERVERS_DIR"/*/; do
+        [ -d "$dir" ] || continue
+        [ -f "$dir/requirements.txt" ] || continue
+        [ -f "$dir/go.mod" ] && continue  # skip Go projects (already built above)
+        name=$(basename "$dir")
+        echo "    -> mcp-server-$name (python/pyinstaller)"
+
+        if [[ "$NEED_DOCKER_BUILD" == "true" ]]; then
+            # Build inside a linux container, mount source dir + output dir
+            docker run --rm \
+                --platform "linux/$BUILD_ARCH" \
+                -v "$dir:/src" \
+                -v "$MCP_BINS_DIR:/out" \
+                python:3.11-slim \
+                sh -c "
+                    apt-get update -qq && apt-get install -y -qq binutils > /dev/null 2>&1 &&
+                    cd /src &&
+                    pip install -q -r requirements.txt &&
+                    pip install -q pyinstaller &&
+                    pyinstaller --onefile --name 'mcp-server-$name' --clean --noconfirm --distpath /out main.py
+                "
+        else
+            (
+                cd "$dir"
+                pip install -q -r requirements.txt
+                pyinstaller --onefile --name "mcp-server-$name" --clean --noconfirm --distpath "$MCP_BINS_DIR" main.py
+            )
+        fi
     done
 
     echo "    MCP bins → $MCP_BINS_DIR:"

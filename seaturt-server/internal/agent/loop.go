@@ -62,6 +62,11 @@ type TextDelta struct {
 	Content string `json:"content"`
 }
 
+// ReasoningDelta is the data for a "reasoning_delta" event.
+type ReasoningDelta struct {
+	Content string `json:"content"`
+}
+
 // ToolCallEvent is the data for a "tool_call" event.
 type ToolCallEvent struct {
 	ID        string `json:"id"`
@@ -114,6 +119,10 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 	messages := make([]llm.ChatMessage, len(history))
 	copy(messages, history)
 
+	// Clear reasoning_content from old messages to save API bandwidth.
+	// The API only requires reasoning_content from the same tool-call round.
+	clearOldReasoningContent(messages)
+
 	// On exit, backfill any assistant tool_calls that lack a corresponding tool result.
 	// This happens when the loop is cancelled mid-execution (user interrupts a tool call).
 	// Without this, the next LLM request would fail because the API requires every
@@ -161,6 +170,12 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 							streamFn(StreamEvent{
 								Type: "text_delta",
 								Data: TextDelta{Content: text},
+							})
+						}
+						if choice.Delta.ReasoningContent != "" {
+							streamFn(StreamEvent{
+								Type: "reasoning_delta",
+								Data: ReasoningDelta{Content: choice.Delta.ReasoningContent},
 							})
 						}
 					}
@@ -487,4 +502,35 @@ func backfillCancelledToolCalls(messages *[]llm.ChatMessage) []llm.ChatMessage {
 		*messages = append(msgs, injected...)
 	}
 	return injected
+}
+
+// clearOldReasoningContent removes reasoning_content from all messages except
+// those in the last assistant+tool round. The DeepSeek API requires
+// reasoning_content to be preserved within the same tool-call round, but
+// sending it for historical messages wastes tokens and bandwidth.
+func clearOldReasoningContent(messages []llm.ChatMessage) {
+	// Find the start of the last assistant+tool round
+	lastAssistantIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" {
+			lastAssistantIdx = i
+			// Continue backward to find the first assistant in this contiguous round
+			// (there may be multiple assistant+tool pairs in one round)
+			for j := i - 1; j >= 0; j-- {
+				if messages[j].Role == "tool" || messages[j].Role == "assistant" {
+					if messages[j].Role == "assistant" {
+						lastAssistantIdx = j
+					}
+				} else {
+					break
+				}
+			}
+			break
+		}
+	}
+
+	// Clear reasoning_content from all messages before the last round
+	for i := 0; i < lastAssistantIdx; i++ {
+		messages[i].ReasoningContent = ""
+	}
 }

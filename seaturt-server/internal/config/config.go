@@ -83,12 +83,13 @@ type MCPServerConfig struct {
 
 // LLMEndpoint holds the resolved LLM connection info for a specific provider+model.
 type LLMEndpoint struct {
-	BaseURL string
-	APIKey  string
-	Model   string
-	API     string            // "openai-completions", "anthropic-messages", etc.
-	Input   []string          // supported input types, e.g. ["text", "image"]
-	Headers map[string]string // custom headers (per-model)
+	BaseURL   string
+	APIKey    string
+	Model     string
+	API       string            // "openai-completions", "anthropic-messages", etc.
+	Input     []string          // supported input types, e.g. ["text", "image"]
+	Headers   map[string]string // custom headers (per-model)
+	Reasoning bool              // true if model is a reasoning model (e.g. DeepSeek R1)
 }
 
 // Load loads config from YAML file (if exists) with environment variable overrides.
@@ -172,6 +173,7 @@ func (c *Config) ResolveLLM(provider, model string) (*LLMEndpoint, error) {
 		endpoint.Model = mc.ID
 		endpoint.Headers = mc.Headers
 		endpoint.Input = mc.Input
+		endpoint.Reasoning = mc.Reasoning
 	}
 	return endpoint, nil
 }

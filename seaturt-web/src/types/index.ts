@@ -52,6 +52,7 @@ export interface Message {
   agent_id: string
   role: "user" | "assistant" | "tool"
   content: string | ContentBlock[]
+  reasoning_content?: string
   tool_calls?: string
   tool_call_id?: string
   created_at: string
@@ -73,9 +74,13 @@ export interface ToolResultEvent {
   is_error: boolean
 }
 
+export interface ReasoningDelta {
+  content: string
+}
+
 export interface StreamEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "error" | "done" | "cancelled"
-  data: TextDelta | ToolCallEvent | ToolResultEvent | { message: string } | null
+  type: "text_delta" | "reasoning_delta" | "tool_call" | "tool_result" | "error" | "done" | "cancelled"
+  data: TextDelta | ReasoningDelta | ToolCallEvent | ToolResultEvent | { message: string } | null
 }
 
 export interface FileEntry {
@@ -94,12 +99,14 @@ export interface DesktopInfo {
 // Chat UI types — ordered segments for interleaved text + tool calls
 export type ChatSegment =
   | { type: "text"; text: string }
+  | { type: "reasoning"; text: string }
   | { type: "tool_call"; toolCall: UIToolCall }
 
 export interface ChatMessage {
   id: string
   role: "user" | "assistant"
   content: string // plain text (kept for backward compat and simple rendering)
+  reasoningContent?: string // accumulated reasoning/thinking content
   images?: { data: string; mime_type: string }[]
   toolCalls?: UIToolCall[] // flat list for quick ID lookup
   segments?: ChatSegment[] // ordered interleaved content

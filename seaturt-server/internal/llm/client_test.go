@@ -56,7 +56,7 @@ func TestConsumeSSE_DataWithSpace(t *testing.T) {
 		"data: [DONE]",
 	)
 
-	client := NewClient("http://test", "key", "model", "", nil)
+	client := NewClient("http://test", "key", "model", "", nil, nil)
 	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
 	require.NoError(t, err)
 
@@ -75,7 +75,7 @@ func TestConsumeSSE_DataWithoutSpace(t *testing.T) {
 		"data:[DONE]",
 	)
 
-	client := NewClient("http://test", "key", "model", "", nil)
+	client := NewClient("http://test", "key", "model", "", nil, nil)
 	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
 	require.NoError(t, err)
 
@@ -95,7 +95,7 @@ func TestConsumeSSE_ChineseUTF8Content(t *testing.T) {
 		"data:[DONE]",
 	)
 
-	client := NewClient("http://test", "key", "model", "", nil)
+	client := NewClient("http://test", "key", "model", "", nil, nil)
 	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
 	require.NoError(t, err)
 
@@ -117,7 +117,7 @@ func TestConsumeSSE_MultipleDeltas(t *testing.T) {
 		"data:[DONE]",
 	)
 
-	client := NewClient("http://test", "key", "model", "", nil)
+	client := NewClient("http://test", "key", "model", "", nil, nil)
 	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
 	require.NoError(t, err)
 
@@ -158,7 +158,7 @@ func TestConsumeSSE_ToolCalls(t *testing.T) {
 		"data:[DONE]",
 	)
 
-	client := NewClient("http://test", "key", "model", "", nil)
+	client := NewClient("http://test", "key", "model", "", nil, nil)
 	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
 	require.NoError(t, err)
 
@@ -181,7 +181,7 @@ func TestConsumeSSE_IgnoresNonDataLines(t *testing.T) {
 		"data:[DONE]",
 	)
 
-	client := NewClient("http://test", "key", "model", "", nil)
+	client := NewClient("http://test", "key", "model", "", nil, nil)
 	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
 	require.NoError(t, err)
 
@@ -198,7 +198,7 @@ func TestConsumeSSE_StreamCallback(t *testing.T) {
 		"data:[DONE]",
 	)
 
-	client := NewClient("http://test", "key", "model", "", nil)
+	client := NewClient("http://test", "key", "model", "", nil, nil)
 	var callbackCount int
 	resp, err := client.consumeSSE(strings.NewReader(stream), func(delta StreamDelta) error {
 		callbackCount++
@@ -216,7 +216,7 @@ func TestConsumeSSE_EmptyStream(t *testing.T) {
 		"data:[DONE]",
 	)
 
-	client := NewClient("http://test", "key", "model", "", nil)
+	client := NewClient("http://test", "key", "model", "", nil, nil)
 	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
 	require.NoError(t, err)
 
@@ -236,7 +236,7 @@ func TestConsumeSSE_MixedSpaceFormats(t *testing.T) {
 		"data:[DONE]",
 	)
 
-	client := NewClient("http://test", "key", "model", "", nil)
+	client := NewClient("http://test", "key", "model", "", nil, nil)
 	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
 	require.NoError(t, err)
 

@@ -17,31 +17,48 @@ import (
 
 // Client calls an OpenAI-compatible chat completion API.
 type Client struct {
-	baseURL    string
-	apiKey     string
-	model      string
-	apiType    string // "openai-completions", "anthropic-messages", etc.
-	headers    map[string]string // custom per-request headers
-	formatter  ContentFormatter
-	httpClient *http.Client
+	baseURL        string
+	apiKey         string
+	model          string
+	apiType        string            // "openai-completions", "anthropic-messages", etc.
+	headers        map[string]string // custom per-request headers
+	supportedInput []string          // e.g. ["text"], ["text","image"]
+	formatter      ContentFormatter
+	httpClient     *http.Client
 }
 
 // NewClient creates a new LLM client.
-func NewClient(baseURL, apiKey, model, apiType string, headers map[string]string) *Client {
+// inputTypes declares what the model accepts (e.g. ["text","image"]).
+// If nil/empty, defaults to ["text"].
+func NewClient(baseURL, apiKey, model, apiType string, headers map[string]string, inputTypes []string) *Client {
 	if apiType == "" {
 		apiType = "openai-completions"
 	}
+	if len(inputTypes) == 0 {
+		inputTypes = []string{"text"}
+	}
 	return &Client{
-		baseURL:   strings.TrimRight(baseURL, "/"),
-		apiKey:    apiKey,
-		model:     model,
-		apiType:   apiType,
-		headers:   headers,
-		formatter: GetFormatter(apiType),
+		baseURL:        strings.TrimRight(baseURL, "/"),
+		apiKey:         apiKey,
+		model:          model,
+		apiType:        apiType,
+		headers:        headers,
+		supportedInput: inputTypes,
+		formatter:      GetFormatter(apiType),
 		httpClient: &http.Client{
 			Timeout: 10 * time.Minute,
 		},
 	}
+}
+
+// SupportsImage returns true if the model accepts image input.
+func (c *Client) SupportsImage() bool {
+	for _, t := range c.supportedInput {
+		if t == "image" {
+			return true
+		}
+	}
+	return false
 }
 
 // Formatter returns the content formatter for this client.
@@ -53,10 +70,11 @@ func (c *Client) Formatter() ContentFormatter {
 
 // ChatMessage represents a message in the conversation.
 type ChatMessage struct {
-	Role       string     `json:"role"`
-	Content    Content    `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role             string     `json:"role"`
+	Content          Content    `json:"content,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
 }
 
 // ToolCall represents a function call requested by the model.
@@ -88,10 +106,11 @@ type FunctionDef struct {
 // chatRequestMessage is a single message in the wire-format request,
 // where Content is already formatted for the target Provider (string or []any).
 type chatRequestMessage struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role             string     `json:"role"`
+	Content          any        `json:"content,omitempty"`
+	ReasoningContent *string    `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
 }
 
 // chatRequestBody is the wire-format request body for chat completions.
@@ -107,11 +126,27 @@ type chatRequestBody struct {
 // and normalizing ToolCalls to ensure wire-format compliance.
 func (c *Client) buildRequestBody(messages []ChatMessage, tools []ToolDef, stream bool) ([]byte, error) {
 	wireMessages := make([]chatRequestMessage, 0, len(messages))
+	supportsImage := c.SupportsImage()
 	for _, m := range messages {
+		content := m.Content
+		// If the model does not support image input, strip image blocks
+		// and replace them with a text placeholder.
+		if !supportsImage && len(content) > 0 && content.HasType("image") {
+			var stripped Content
+			for _, b := range content {
+				if b.Type == "image" {
+					stripped = append(stripped, NewTextContent("[image]"))
+				} else {
+					stripped = append(stripped, b)
+				}
+			}
+			content = stripped
+		}
+
 		var formatted any
-		if len(m.Content) > 0 {
+		if len(content) > 0 {
 			var err error
-			formatted, err = c.formatter.FormatContent(m.Content)
+			formatted, err = c.formatter.FormatContent(content)
 			if err != nil {
 				return nil, fmt.Errorf("format content for role=%s: %w", m.Role, err)
 			}
@@ -122,12 +157,18 @@ func (c *Client) buildRequestBody(messages []ChatMessage, tools []ToolDef, strea
 		// sent back (e.g. empty arguments, missing type field).
 		normalizedTC := normalizeToolCalls(m.ToolCalls)
 
-		wireMessages = append(wireMessages, chatRequestMessage{
+		wireMsg := chatRequestMessage{
 			Role:       m.Role,
 			Content:    formatted,
 			ToolCalls:  normalizedTC,
 			ToolCallID: m.ToolCallID,
-		})
+		}
+		// Transparently pass reasoning_content back to the API (required by DeepSeek R1 etc.)
+		if m.ReasoningContent != "" {
+			rc := m.ReasoningContent
+			wireMsg.ReasoningContent = &rc
+		}
+		wireMessages = append(wireMessages, wireMsg)
 	}
 	return json.Marshal(chatRequestBody{
 		Model:    c.model,
@@ -379,6 +420,7 @@ func (c *Client) consumeSSE(r io.Reader, cb StreamCallback) (*ChatResponse, erro
 
 	assembled := &ChatResponse{}
 	var contentBuilder strings.Builder
+	var reasoningBuilder strings.Builder
 	toolCallsMap := make(map[int]*ToolCall) // index -> accumulated tool call
 	var finishReason string
 
@@ -411,7 +453,7 @@ func (c *Client) consumeSSE(r io.Reader, cb StreamCallback) (*ChatResponse, erro
 			}
 		}
 
-		// Accumulate content and tool_calls from deltas
+		// Accumulate content, reasoning_content, and tool_calls from deltas
 		for _, choice := range delta.Choices {
 			if choice.FinishReason != "" {
 				finishReason = choice.FinishReason
@@ -421,6 +463,9 @@ func (c *Client) consumeSSE(r io.Reader, cb StreamCallback) (*ChatResponse, erro
 			}
 			if text := choice.Delta.Content.String(); text != "" {
 				contentBuilder.WriteString(text)
+			}
+			if choice.Delta.ReasoningContent != "" {
+				reasoningBuilder.WriteString(choice.Delta.ReasoningContent)
 			}
 			for _, tc := range choice.Delta.ToolCalls {
 				existing, ok := toolCallsMap[choice.Index]
@@ -445,8 +490,9 @@ func (c *Client) consumeSSE(r io.Reader, cb StreamCallback) (*ChatResponse, erro
 
 	// Build assembled response (even if stream was interrupted)
 	msg := ChatMessage{
-		Role:    "assistant",
-		Content: Content{NewTextContent(contentBuilder.String())},
+		Role:             "assistant",
+		Content:          Content{NewTextContent(contentBuilder.String())},
+		ReasoningContent: reasoningBuilder.String(),
 	}
 	for i := 0; i < len(toolCallsMap); i++ {
 		if tc, ok := toolCallsMap[i]; ok {

@@ -77,6 +77,9 @@ func (s *Store) migrate() error {
 	// ALTER TABLE ... ADD COLUMN fails if the column already exists; just ignore.
 	_, _ = s.db.Exec(`ALTER TABLE messages ADD COLUMN tool_call_id TEXT NOT NULL DEFAULT ''`)
 
+	// Add reasoning_content column for reasoning model support (v0.1.6)
+	_, _ = s.db.Exec(`ALTER TABLE messages ADD COLUMN reasoning_content TEXT NOT NULL DEFAULT ''`)
+
 	return nil
 }
 
@@ -162,16 +165,16 @@ func (s *Store) CreateMessage(m *agent.Message) error {
 	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO messages (id, agent_id, role, content, tool_calls, tool_call_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		m.ID, m.AgentID, m.Role, string(contentJSON), m.ToolCalls, m.ToolCallID, m.CreatedAt,
+		`INSERT INTO messages (id, agent_id, role, content, reasoning_content, tool_calls, tool_call_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.AgentID, m.Role, string(contentJSON), m.ReasoningContent, m.ToolCalls, m.ToolCallID, m.CreatedAt,
 	)
 	return err
 }
 
 func (s *Store) ListMessages(agentID string) ([]*agent.Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, agent_id, role, content, tool_calls, tool_call_id, created_at
+		`SELECT id, agent_id, role, content, reasoning_content, tool_calls, tool_call_id, created_at
 		 FROM messages WHERE agent_id = ? ORDER BY created_at ASC`, agentID,
 	)
 	if err != nil {
@@ -183,7 +186,7 @@ func (s *Store) ListMessages(agentID string) ([]*agent.Message, error) {
 	for rows.Next() {
 		m := &agent.Message{}
 		var contentJSON string
-		if err := rows.Scan(&m.ID, &m.AgentID, &m.Role, &contentJSON, &m.ToolCalls, &m.ToolCallID, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.AgentID, &m.Role, &contentJSON, &m.ReasoningContent, &m.ToolCalls, &m.ToolCallID, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		// Deserialize Content from JSON

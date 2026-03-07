@@ -9,7 +9,9 @@ interface Props {
 }
 
 export default function InputBar({ agentId, disabled }: Props) {
-  const { sendMessage, isStreaming, stopStreaming } = useChatStore()
+  const sendMessage = useChatStore((s) => s.sendMessage)
+  const isStreaming = useChatStore((s) => s.getIsStreaming(agentId))
+  const stopStreaming = useChatStore((s) => s.stopStreaming)
   const [text, setText] = useState("")
   const [images, setImages] = useState<File[]>([])
   const [previews, setPreviews] = useState<string[]>([])

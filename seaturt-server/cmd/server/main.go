@@ -64,7 +64,7 @@ func main() {
 		slog.Error("failed to resolve LLM config", "err", err)
 		os.Exit(1)
 	}
-	llmClient := llm.NewClient(llmEndpoint.BaseURL, llmEndpoint.APIKey, llmEndpoint.Model, llmEndpoint.API, llmEndpoint.Headers)
+	llmClient := llm.NewClient(llmEndpoint.BaseURL, llmEndpoint.APIKey, llmEndpoint.Model, llmEndpoint.API, llmEndpoint.Headers, llmEndpoint.Input)
 	slog.Info("LLM client initialized",
 		"base_url", llmEndpoint.BaseURL,
 		"model", llmEndpoint.Model,

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import Sidebar from "./Sidebar"
 import { useAgentStore } from "@/stores/agentStore"
 import ChatPanel from "@/components/chat/ChatPanel"
@@ -28,6 +28,18 @@ export default function Layout() {
   const agents = useAgentStore((s) => s.agents)
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false)
+
+  // Track all agent IDs that have been visited so their ChatPanel instances stay alive
+  const visitedAgentIdsRef = useRef<Set<string>>(new Set())
+  if (selectedAgentId) {
+    visitedAgentIdsRef.current.add(selectedAgentId)
+  }
+  // Clean up visited IDs for agents that no longer exist
+  const agentIdSet = new Set(agents.map((a) => a.id))
+  for (const id of visitedAgentIdsRef.current) {
+    if (!agentIdSet.has(id)) visitedAgentIdsRef.current.delete(id)
+  }
+  const visitedAgentIds = Array.from(visitedAgentIdsRef.current)
 
   const bp = useBreakpoint()
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
@@ -81,16 +93,28 @@ export default function Layout() {
           </div>
         )}
 
-        {selectedAgent ? (
-          <ChatPanel
-            key={selectedAgent.id}
-            agent={selectedAgent}
-            onToggleWorkspace={() => setRightPanelOpen((v) => !v)}
-            workspaceOpen={rightPanelOpen}
-          />
-        ) : (
-          <WelcomePage />
-        )}
+        {/* Keep-alive: render all visited ChatPanels, hide non-active ones */}
+        {visitedAgentIds.map((id) => {
+          const agent = agents.find((a) => a.id === id)
+          if (!agent) return null
+          const isActive = id === selectedAgentId
+          return (
+            <div
+              key={id}
+              className="flex flex-col h-full"
+              style={{ display: isActive ? "flex" : "none" }}
+            >
+              <ChatPanel
+                agent={agent}
+                onToggleWorkspace={() => setRightPanelOpen((v) => !v)}
+                workspaceOpen={rightPanelOpen}
+              />
+            </div>
+          )
+        })}
+
+        {/* Show welcome page only when no agent is selected */}
+        {!selectedAgentId && <WelcomePage />}
       </main>
 
       {/* Right panel: always on desktop, floating on tablet, hidden on mobile (accessible via toggle) */}

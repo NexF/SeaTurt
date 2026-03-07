@@ -564,7 +564,7 @@ func (m *Manager) GetLLMClientForAgent(ag *Agent) *llm.Client {
 		return m.llmClient
 	}
 
-	return llm.NewClient(endpoint.BaseURL, endpoint.APIKey, endpoint.Model, endpoint.API, endpoint.Headers)
+	return llm.NewClient(endpoint.BaseURL, endpoint.APIKey, endpoint.Model, endpoint.API, endpoint.Headers, endpoint.Input)
 }
 
 // GetStore returns the store for message operations.

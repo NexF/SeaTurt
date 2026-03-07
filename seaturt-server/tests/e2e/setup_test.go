@@ -44,6 +44,7 @@ func TestMain(m *testing.M) {
 		endpoint.Model,
 		endpoint.API,
 		endpoint.Headers,
+		endpoint.Input,
 	)
 
 	// 3. Init Docker manager

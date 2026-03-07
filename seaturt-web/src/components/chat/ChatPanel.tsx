@@ -23,7 +23,10 @@ interface Props {
 }
 
 export default function ChatPanel({ agent, onToggleWorkspace, workspaceOpen }: Props) {
-  const { messages, isStreaming, loadHistory, clearHistory } = useChatStore()
+  const messages = useChatStore((s) => s.getMessages(agent.id))
+  const isStreaming = useChatStore((s) => s.getIsStreaming(agent.id))
+  const loadHistory = useChatStore((s) => s.loadHistory)
+  const clearHistory = useChatStore((s) => s.clearHistory)
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const userScrolledUp = useRef(false)

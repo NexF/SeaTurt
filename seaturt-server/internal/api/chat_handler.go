@@ -144,11 +144,12 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 		SystemPrompt: h.mgr.LoadSystemPrompt(ag),
 		OnMessage: func(msg llm.ChatMessage) {
 			dbMsg := &agent.Message{
-				ID:        fmt.Sprintf("msg_%d", time.Now().UnixNano()),
-				AgentID:   id,
-				Role:      msg.Role,
-				Content:   msg.Content,
-				CreatedAt: time.Now(),
+				ID:               fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+				AgentID:          id,
+				Role:             msg.Role,
+				Content:          msg.Content,
+				ReasoningContent: msg.ReasoningContent,
+				CreatedAt:        time.Now(),
 			}
 			if len(msg.ToolCalls) > 0 {
 				if tcJSON, err := json.Marshal(msg.ToolCalls); err == nil {
@@ -355,9 +356,10 @@ func convertToLLMMessages(msgs []*agent.Message) []llm.ChatMessage {
 	result := make([]llm.ChatMessage, 0, len(msgs))
 	for _, m := range msgs {
 		cm := llm.ChatMessage{
-			Role:       m.Role,
-			Content:    m.Content,
-			ToolCallID: m.ToolCallID,
+			Role:             m.Role,
+			Content:          m.Content,
+			ReasoningContent: m.ReasoningContent,
+			ToolCallID:       m.ToolCallID,
 		}
 		// Restore tool_calls if present
 		if m.ToolCalls != "" {
