@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/seaturt/server/internal/llm"
@@ -283,24 +284,48 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 			var args map[string]any
 			if tc.Function.Arguments != "" {
 				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-					toolResult := fmt.Sprintf("Error parsing arguments: %s", err.Error())
-					toolResultBlocks := []llm.ContentBlock{llm.NewTextContent(toolResult)}
-					toolMsg := llm.ChatMessage{
-						Role:       "tool",
-						Content:    llm.Content(toolResultBlocks),
-						ToolCallID: tc.ID,
+					// Try to salvage: if LLM concatenated multiple JSON objects (e.g. {...}{...}),
+					// extract the first valid one and warn about the rest.
+					salvaged := false
+					raw := strings.TrimSpace(tc.Function.Arguments)
+					if dec := json.NewDecoder(strings.NewReader(raw)); dec.More() {
+						var first map[string]any
+						if decErr := dec.Decode(&first); decErr == nil && dec.InputOffset() < int64(len(raw)) {
+							args = first
+							salvaged = true
+							slog.Warn("tool call contained concatenated JSON objects, using first one",
+								"tool", tc.Function.Name,
+								"raw_length", len(raw),
+								"used_offset", dec.InputOffset(),
+							)
+						}
 					}
-					messages = append(messages, toolMsg)
-					if cfg.OnMessage != nil {
-						cfg.OnMessage(toolMsg)
+
+					if !salvaged {
+						toolResult := fmt.Sprintf(
+							"Error: arguments is not valid JSON — %s. "+
+								"Each tool call must have exactly one JSON object as arguments. "+
+								"If you need to call multiple tools, make separate tool_use calls.",
+							err.Error(),
+						)
+						toolResultBlocks := []llm.ContentBlock{llm.NewTextContent(toolResult)}
+						toolMsg := llm.ChatMessage{
+							Role:       "tool",
+							Content:    llm.Content(toolResultBlocks),
+							ToolCallID: tc.ID,
+						}
+						messages = append(messages, toolMsg)
+						if cfg.OnMessage != nil {
+							cfg.OnMessage(toolMsg)
+						}
+						if streamFn != nil {
+							streamFn(StreamEvent{
+								Type: "tool_result",
+								Data: ToolResultEvent{ToolCallID: tc.ID, Content: toolResultBlocks, IsError: true},
+							})
+						}
+						continue
 					}
-					if streamFn != nil {
-						streamFn(StreamEvent{
-							Type: "tool_result",
-							Data: ToolResultEvent{ToolCallID: tc.ID, Content: toolResultBlocks, IsError: true},
-						})
-					}
-					continue
 				}
 			}
 
