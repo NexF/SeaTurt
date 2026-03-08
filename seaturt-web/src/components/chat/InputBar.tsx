@@ -35,7 +35,7 @@ export default function InputBar({ agentId, disabled }: Props) {
   }, [text, images, isStreaming, disabled, agentId, sendMessage])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       handleSend()
     }

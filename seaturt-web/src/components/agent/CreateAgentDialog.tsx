@@ -75,7 +75,7 @@ export default function CreateAgentDialog({ open, onOpenChange }: Props) {
               placeholder="我的助手"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+              onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && handleCreate()}
             />
           </div>
 

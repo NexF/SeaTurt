@@ -1,7 +1,28 @@
 # UI 设计稿
 
 > 本文档包含所有线框图、交互细节、布局规范、响应式规则和主题设计。
-> 持续更新，当前已包含 v0.1.1 桌面预览优化、v0.1.2 取消机制 UI。
+> 持续更新，当前已包含 v0.1.1 桌面预览优化、v0.1.2 取消机制 UI、v0.2.0 Session 多会话。
+
+---
+
+## 核心概念（v0.2.0 更新）
+
+### Agent vs Session
+
+| 概念 | 性质 | 说明 |
+|------|------|------|
+| **Agent** | 重量级 | 绑定容器（Docker + 桌面环境 + MCP Server），创建/启停成本高 |
+| **Session** | 轻量级 | Agent 下的一次独立对话，共享 Agent 的容器和工具，只有消息历史是隔离的 |
+
+**类比**：Agent ≈ ChatGPT 中的 GPT（一个配置好的环境），Session ≈ 一次对话（conversation）。
+
+**关键规则**：
+- 一个 Agent 下可以有多个 Session
+- 所有 Session **共享同一个容器**（文件系统、桌面、MCP Server）
+- 每个 Session 有**独立的消息历史**和**独立的 LLM 上下文**
+- 新建 Session 是即时的（不需要启动容器）
+- 删除 Session 只删消息，不影响容器
+- Agent 停止后，所有 Session 的历史保留，重启后可继续
 
 ---
 
@@ -10,13 +31,13 @@
 ```
 ┌───────────────────────────────────────────────────────────────────┐
 │ ┌──────────┐ ┌──────────────────────────────────┐ ┌────────────┐ │
-│ │          │ │ Agent 名称  模型  状态   [⚙][📁] │ │            │ │
-│ │  Agent   │ ├──────────────────────────────────┤ │ Workspace  │ │
-│ │  列表    │ │                                  │ │ 文件树     │ │
+│ │ Agent    │ │ Agent 名称  模型  状态   [⚙][📁] │ │            │ │
+│ │ + Session│ ├──────────────────────────────────┤ │ Workspace  │ │
+│ │ 列表     │ │                                  │ │ 文件树     │ │
 │ │          │ │         对话区域                   │ │            │ │
-│ │  侧边栏  │ │     （消息气泡 + Tool 卡片）       │ │ 桌面预览   │ │
+│ │ 侧边栏   │ │     （消息气泡 + Tool 卡片）       │ │ 桌面预览   │ │
 │ │          │ │                                  │ │            │ │
-│ │  (固定)   │ │                                  │ │ (可收起)   │ │
+│ │ (固定)   │ │                                  │ │ (可收起)   │ │
 │ │          │ ├──────────────────────────────────┤ │            │ │
 │ │          │ │ [📎] 输入消息...          [发送]  │ │ (可收起)   │ │
 │ └──────────┘ └──────────────────────────────────┘ └────────────┘ │
@@ -24,15 +45,15 @@
      240px              自适应                         320px
 ```
 
-- **左侧边栏**：固定 240px，Agent 列表 + 新建按钮
-- **中间主区域**：对话面板，自适应宽度
-- **右侧边栏**：320px，可收起，Workspace 文件树 + 桌面预览
+- **左侧边栏**：固定 240px，Agent 列表（可折叠展开 Session 列表）+ 新建按钮
+- **中间主区域**：当前 Session 的对话面板，自适应宽度
+- **右侧边栏**：320px，可收起，当前 Agent 的 Workspace 文件树 + 桌面预览
 
 ---
 
 ## 页面线框图
 
-### Agent 列表（左侧边栏）
+### 左侧边栏：Agent + Session 列表（v0.2.0 更新）
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -41,9 +62,14 @@
 │ │             │ │                                  │ │
 │ │ + 新建Agent │ │                                  │ │
 │ │             │ │                                  │ │
-│ │ ┌─────────┐ │ │         选择一个 Agent            │ │
-│ │ │● coder  │ │ │         开始对话                   │ │
-│ │ │  gpt-4o │ │ │                                  │ │
+│ │ ┌─────────┐ │ │                                  │ │
+│ │ │● coder  │ │ │                                  │ │
+│ │ │  gpt-4o │ │ │     当前 Session 的对话内容        │ │
+│ │ │ [+新对话]│ │ │                                  │ │
+│ │ ├─────────┤ │ │                                  │ │
+│ │ │ ▸ 整理周报│ │ │                                  │ │
+│ │ │ ▸ 数据分析│ │ │                                  │ │
+│ │ │ ● 代码审查│ │ │  ← 当前选中的 Session             │ │
 │ │ └─────────┘ │ │                                  │ │
 │ │ ┌─────────┐ │ │                                  │ │
 │ │ │○ writer │ │ │                                  │ │
@@ -54,18 +80,47 @@
 └──────────────────────────────────────────────────────┘
 ```
 
-**状态指示：**
-- `●` 运行中（绿色）
-- `○` 已停止（灰色）
-- `⚠` 异常（橙色）
+**层级结构：**
+
+```
+侧边栏
+├─ + 新建 Agent（按钮）
+├─ ▾ Agent: coder (● running)          ← 点击展开/折叠 Session 列表
+│   ├─ [+ 新对话]                      ← 快速新建 Session
+│   ├─ 整理周报       3月5日            ← Session 条目（名称 + 时间）
+│   ├─ 数据分析       3月6日
+│   └─ ● 代码审查     3月8日            ← 当前活跃 Session（高亮）
+├─ ▸ Agent: writer (○ stopped)          ← 折叠状态，不显示 Session
+└─ 主题切换 🌙/☀️
+```
+
+**Agent 卡片行为：**
+- 点击 Agent 名称区域 → 展开/折叠该 Agent 的 Session 列表
+- 展开时自动选中最近的 Session（如果没有则新建一个）
+- Agent 状态图标（●/○/⚠）显示在名称左侧
+- 模型名显示在 Agent 名称下方（次要文字）
+- 右键菜单不变（启动/停止/设置/删除）
+
+**Session 条目行为：**
+- 点击 → 切换到该 Session 的对话
+- Session 名称：取首条用户消息的前 20 字作为标题，未发送过消息的显示"新对话"
+- 右侧显示最后消息时间（今天显示时分，之前显示月日）
+- 当前选中的 Session 高亮背景
+- 鼠标 hover 显示删除按钮（🗑，点击需二次确认）
+
+**[+ 新对话] 按钮：**
+- 位于 Agent 展开后的 Session 列表顶部
+- 点击 → 创建新 Session → 自动选中并切换到空对话
+- Agent 未运行时也可以创建 Session（但输入框禁用，提示"请先启动 Agent"）
 
 ---
 
-### 对话面板（主区域）
+### 对话面板（主区域，v0.2.0 更新）
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Sidebar │  coder (gpt-4o) ● Running        [⚙][📁] │
+│         │  📝 代码审查                      [+新对话] │
 │         │───────────────────────────────────────────│
 │         │                                           │
 │         │  👤 帮我把上周的会议纪要整理成周报           │
@@ -75,11 +130,6 @@
 │         │  ┌─ 🔧 file_read ─────────────────────┐   │
 │         │  │ 📄 会议纪要/0305.md                 │   │
 │         │  │ ✓ 读取成功                           │   │
-│         │  └─────────────────────────────────────┘   │
-│         │                                           │
-│         │  ┌─ 🔧 file_write ────────────────────┐   │
-│         │  │ 📄 周报/2025-W10.md                 │   │
-│         │  │ ▸ 点击展开查看内容                    │   │
 │         │  └─────────────────────────────────────┘   │
 │         │                                           │
 │         │  🤖 周报已整理完成，包含以下要点：          │
@@ -93,10 +143,11 @@
 └──────────────────────────────────────────────────────┘
 ```
 
-**顶栏组成：**
-- Agent 名称 + 模型 + 运行状态
-- `[⚙]` → 打开 Agent 设置
-- `[📁]` → 切换右侧 Workspace 面板
+**顶栏组成（两行）：**
+- **第一行**：Agent 名称 + 模型 + 运行状态 + `[⚙]` 设置 + `[📁]` Workspace
+- **第二行**：Session 标题（可编辑）+ `[+ 新对话]` 快捷按钮
+  - 点击 Session 标题可以 inline 编辑重命名
+  - `[+ 新对话]` → 在当前 Agent 下新建 Session 并切换过去
 
 **对话区域：**
 - 用户消息（`👤`）右对齐，深色背景
@@ -430,3 +481,127 @@
 | 消息间距 | 12px |
 | 代码字体 | `JetBrains Mono`, `Fira Code`, `monospace` |
 | 正文字体 | `Inter`, `-apple-system`, `sans-serif` |
+
+---
+
+## Session 设计详解（v0.2.0）
+
+### 数据模型
+
+**后端 Session 结构：**
+
+```go
+type Session struct {
+    ID        string    `json:"id"`         // 唯一标识，自动生成
+    AgentID   string    `json:"agent_id"`   // 所属 Agent
+    Title     string    `json:"title"`      // 显示名称
+    CreatedAt time.Time `json:"created_at"`
+    UpdatedAt time.Time `json:"updated_at"` // 最后一条消息的时间
+}
+```
+
+**Message 表变更：**
+
+```
+之前：Message.AgentID  → 消息绑定到 Agent
+之后：Message.SessionID → 消息绑定到 Session（SessionID 可反查 AgentID）
+```
+
+**前端类型：**
+
+```typescript
+interface Session {
+  id: string
+  agent_id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+```
+
+### API 变更
+
+**新增 Session API：**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/agents/:id/sessions` | 获取 Agent 下所有 Session 列表（按 updated_at 降序） |
+| `POST` | `/api/agents/:id/sessions` | 新建 Session（可选 title，默认"新对话"） |
+| `PUT` | `/api/agents/:id/sessions/:sid` | 更新 Session（重命名 title） |
+| `DELETE` | `/api/agents/:id/sessions/:sid` | 删除 Session（同时删除关联消息） |
+
+**现有 API 路由变更：**
+
+```
+之前：POST   /api/agents/:id/chat               → 发消息
+之后：POST   /api/agents/:id/sessions/:sid/chat  → 发消息到指定 Session
+
+之前：GET    /api/agents/:id/history             → 获取历史
+之后：GET    /api/agents/:id/sessions/:sid/history
+
+之前：DELETE /api/agents/:id/history             → 清空历史
+之后：DELETE /api/agents/:id/sessions/:sid/history
+
+之前：POST   /api/agents/:id/chat/cancel         → 取消对话
+之后：POST   /api/agents/:id/sessions/:sid/chat/cancel
+
+之前：POST   /api/agents/:id/chat/cancel-tool/:toolCallId
+之后：POST   /api/agents/:id/sessions/:sid/chat/cancel-tool/:toolCallId
+```
+
+**不变的 API**（Agent 级别，与 Session 无关）：
+- `POST/GET/DELETE /api/agents` — Agent CRUD
+- `POST /api/agents/:id/start|stop` — 启停
+- `GET /api/agents/:id/desktop|ports|files` — 容器相关
+- `GET|PUT /api/agents/:id/system-prompt` — 系统提示词
+
+### 前端状态管理变更
+
+**agentStore 变更：**
+
+```typescript
+interface AgentStore {
+  // 新增
+  sessions: Record<string, Session[]>         // agentId -> sessions
+  selectedSessionId: string | null
+  fetchSessions(agentId: string): Promise<void>
+  createSession(agentId: string): Promise<Session>
+  deleteSession(agentId: string, sessionId: string): Promise<void>
+  renameSession(agentId: string, sessionId: string, title: string): Promise<void>
+  selectSession(agentId: string, sessionId: string): void
+}
+```
+
+**chatStore 变更：**
+
+```typescript
+// 之前：以 agentId 为 key 隔离状态
+agentStates: Record<string, PerAgentState>
+
+// 之后：以 sessionId 为 key 隔离状态
+sessionStates: Record<string, PerSessionState>
+
+interface PerSessionState {
+  messages: ChatMessage[]
+  isStreaming: boolean
+  abortController: AbortController | null
+}
+```
+
+**选中逻辑：**
+
+```
+用户点击 Agent → 展开 Session 列表 → 自动选中最近的 Session
+                                   → 如果没有 Session → 自动创建一个
+用户点击 Session → 切换到该 Session 的对话
+用户点击 [+ 新对话] → 创建新 Session → 自动选中
+```
+
+### Session 标题自动生成
+
+- 新建时默认标题："新对话"
+- 用户发送第一条消息后，自动截取消息前 20 个字符作为标题
+- 调用 `PUT /api/agents/:id/sessions/:sid` 更新标题
+- 用户也可以在顶栏手动编辑标题
+
+
