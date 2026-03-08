@@ -145,6 +145,15 @@ build_server() {
     cp "$DOCKER_SRC/svc-selkies-run" "$DOCKER_DST/svc-selkies-run"
     echo "    Docker files copied → $DOCKER_DST/"
 
+    # Copy prompts directory
+    local PROMPTS_SRC="$SERVER_DIR/prompts"
+    local PROMPTS_DST="$BUILD_DIR/prompts"
+    if [[ -d "$PROMPTS_SRC" ]]; then
+        mkdir -p "$PROMPTS_DST"
+        cp -r "$PROMPTS_SRC"/* "$PROMPTS_DST"/
+        echo "    Prompts copied → $PROMPTS_DST/"
+    fi
+
     # Generate setup.sh for end users
     cat > "$BUILD_DIR/setup.sh" <<'SETUP_EOF'
 #!/usr/bin/env bash

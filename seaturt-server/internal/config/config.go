@@ -41,6 +41,10 @@ type Config struct {
 	// MCP Bins 目录（宿主机路径，存放预编译的 MCP Server 二进制/脚本）
 	// 默认为可执行文件所在目录下的 mcp-bins/
 	MCPBinsDir string `yaml:"mcp_bins_dir" json:"mcp_bins_dir"`
+
+	// Prompts 目录（宿主机路径，存放 system prompt 模板文件）
+	// 默认为可执行文件所在目录下的 prompts/
+	PromptsDir string `yaml:"prompts_dir" json:"prompts_dir"`
 }
 
 // ContainerConfig holds container-level configuration.
@@ -284,6 +288,15 @@ func (c *Config) GetMCPBinsDir() string {
 		return expandHome(c.MCPBinsDir)
 	}
 	return filepath.Join(c.ServerDir(), "mcp-bins")
+}
+
+// GetPromptsDir returns the path to the prompts template directory.
+// Default: <serverDir>/prompts/
+func (c *Config) GetPromptsDir() string {
+	if c.PromptsDir != "" {
+		return expandHome(c.PromptsDir)
+	}
+	return filepath.Join(c.ServerDir(), "prompts")
 }
 
 func getEnv(key, fallback string) string {

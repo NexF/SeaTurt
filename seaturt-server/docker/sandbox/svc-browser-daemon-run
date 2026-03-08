@@ -1,0 +1,18 @@
+#!/usr/bin/with-contenv bash
+
+# s6 service: browser MCP daemon
+# Waits for desktop environment (X11 DISPLAY=:1) then starts the Node.js daemon.
+
+# Wait for desktop to be ready (same pattern as svc-selkies-run)
+until [ -f /defaults/pid ]; do
+  sleep .5
+done
+
+export DISPLAY=:1
+
+# Ensure user data directory exists
+mkdir -p /opt/browser-daemon/user-data
+
+# exec replaces this shell with node — s6 manages the node process directly
+# (signal forwarding, automatic restart on crash)
+exec node /opt/browser-daemon/server.js

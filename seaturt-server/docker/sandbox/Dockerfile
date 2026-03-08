@@ -32,5 +32,27 @@ ENV SELKIES_IS_MANUAL_RESOLUTION_MODE=true \
 COPY svc-selkies-run /etc/s6-overlay/s6-rc.d/svc-selkies/run
 RUN chmod +x /etc/s6-overlay/s6-rc.d/svc-selkies/run
 
+# ---- Node.js 20 (for browser MCP daemon) ----
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Browser MCP daemon: install deps + Playwright Chromium ----
+COPY mcp-servers/browser/package.json mcp-servers/browser/server.js /opt/browser-daemon/
+RUN cd /opt/browser-daemon \
+    && npm install --production \
+    && npx playwright install chromium \
+    && npx playwright install-deps chromium \
+    && mkdir -p /opt/browser-daemon/user-data
+
+# ---- Register browser daemon as s6 service ----
+COPY svc-browser-daemon-run /etc/s6-overlay/s6-rc.d/svc-browser-daemon/run
+RUN chmod +x /etc/s6-overlay/s6-rc.d/svc-browser-daemon/run \
+    && echo "longrun" > /etc/s6-overlay/s6-rc.d/svc-browser-daemon/type \
+    && mkdir -p /etc/s6-overlay/s6-rc.d/svc-browser-daemon/dependencies.d \
+    && touch /etc/s6-overlay/s6-rc.d/svc-browser-daemon/dependencies.d/svc-de \
+    && mkdir -p /etc/s6-overlay/s6-rc.d/user/contents.d \
+    && touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-browser-daemon
+
 # Ports: 3000 (HTTP Selkies), 3001 (HTTPS Selkies)
 EXPOSE 3000 3001

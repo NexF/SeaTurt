@@ -2,16 +2,24 @@ package agent
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"text/template"
 )
 
 // SystemPromptConfig holds the configuration for generating SYSTEM.md.
 type SystemPromptConfig struct {
-	MCPServers []MCPServerConfig // configured MCP servers
-	EnvVars    map[string]string // custom environment variables
-	ExtraRules string            // user-defined extra rules (optional)
+	MCPServers  []MCPServerConfig // configured MCP servers
+	EnvVars     map[string]string // custom environment variables
+	ExtraRules  string            // user-defined extra rules (optional)
+	CurrentDate string            // current date, e.g. "2026-03-08"
+	CurrentTime string            // current time, e.g. "15:04:05"
 }
+
+// ---- Fallback constants (used when prompts/system.md is not available) ----
 
 const systemPromptBase = `# Agent 系统指令
 
@@ -24,6 +32,7 @@ const systemPromptBase = `# Agent 系统指令
 - 对文件的修改要精确，优先使用 sed/patch 等工具做局部修改，避免重写整个文件
 - 安装软件包时使用非交互模式（如 apt-get -y）
 - 输出要简洁精确
+- 每次工具调用必须独立发起，arguments 字段必须是合法的单个 JSON 对象，禁止将多次调用的参数拼接在同一个 arguments 中
 
 ## 工作目录
 当前工作目录为 ` + "`/workspace`" + `，这是与宿主机共享的挂载目录。你在此创建的文件可以被宿主机直接访问。
@@ -44,8 +53,48 @@ const systemPromptDesktop = `
 桌面通过 Selkies 提供远程访问（端口 3000/3001）。
 `
 
+// RenderSystemTemplate renders a Go template string with the given config.
+// Used at chat time to render the SYSTEM.md template with current context.
+func RenderSystemTemplate(tmplContent string, cfg SystemPromptConfig) (string, error) {
+	tmpl, err := template.New("system").Parse(tmplContent)
+	if err != nil {
+		return "", fmt.Errorf("parse template: %w", err)
+	}
+
+	var buf strings.Builder
+	if err := tmpl.Execute(&buf, cfg); err != nil {
+		return "", fmt.Errorf("execute template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
 // GenerateSystemMD generates the content for SYSTEM.md based on the given config.
-func GenerateSystemMD(cfg SystemPromptConfig) string {
+// It first tries to load and render the template from promptsDir/system.md.
+// If that fails (file not found, parse error, or render error), it falls back to the hardcoded constants.
+// NOTE: This is now only used by tests and the fallback path. The main flow uses
+// copySystemPromptTemplate (Create) + RenderSystemTemplate (Chat).
+func GenerateSystemMD(cfg SystemPromptConfig, promptsDir string) string {
+	tmplPath := filepath.Join(promptsDir, "system.md")
+	tmplContent, err := os.ReadFile(tmplPath)
+	if err != nil {
+		slog.Warn("failed to read system.md template, using fallback",
+			"path", tmplPath, "err", err)
+		return generateSystemMDFallback(cfg)
+	}
+
+	rendered, err := RenderSystemTemplate(string(tmplContent), cfg)
+	if err != nil {
+		slog.Warn("failed to render system.md template, using fallback",
+			"path", tmplPath, "err", err)
+		return generateSystemMDFallback(cfg)
+	}
+
+	return rendered
+}
+
+// generateSystemMDFallback is the original hardcoded logic (backward compatible).
+func generateSystemMDFallback(cfg SystemPromptConfig) string {
 	var buf strings.Builder
 	buf.WriteString(systemPromptBase)
 

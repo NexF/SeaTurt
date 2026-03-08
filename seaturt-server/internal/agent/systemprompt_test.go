@@ -17,7 +17,7 @@ func TestGenerateSystemMD_Default(t *testing.T) {
 		},
 	}
 
-	md := GenerateSystemMD(cfg)
+	md := GenerateSystemMD(cfg, "")
 
 	assert.Contains(t, md, "# Agent 系统指令")
 	assert.Contains(t, md, "## 身份")
@@ -43,7 +43,7 @@ func TestGenerateSystemMD_DesktopAlwaysIncluded(t *testing.T) {
 		},
 	}
 
-	md := GenerateSystemMD(cfg)
+	md := GenerateSystemMD(cfg, "")
 
 	assert.Contains(t, md, "## 桌面环境")
 	assert.Contains(t, md, "screenshot")
@@ -63,7 +63,7 @@ func TestGenerateSystemMD_ExtraRules(t *testing.T) {
 		ExtraRules: "你是一个全栈开发助手，擅长分析和解决问题。",
 	}
 
-	md := GenerateSystemMD(cfg)
+	md := GenerateSystemMD(cfg, "")
 
 	assert.Contains(t, md, "## 附加指令")
 	assert.Contains(t, md, "你是一个全栈开发助手")
@@ -73,7 +73,7 @@ func TestGenerateSystemMD_ExtraRules(t *testing.T) {
 func TestGenerateSystemMD_NoMCPServers(t *testing.T) {
 	t.Parallel()
 	cfg := SystemPromptConfig{}
-	md := GenerateSystemMD(cfg)
+	md := GenerateSystemMD(cfg, "")
 
 	assert.NotContains(t, md, "## 可用工具")
 	// Desktop section still included

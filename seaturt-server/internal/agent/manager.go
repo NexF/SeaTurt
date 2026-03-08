@@ -196,16 +196,6 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		return nil, fmt.Errorf("create .seaturt dir: %w", err)
 	}
 
-	// Generate and write SYSTEM.md
-	systemMD := GenerateSystemMD(SystemPromptConfig{
-		MCPServers: mcpServers,
-		EnvVars:    req.EnvVars,
-		ExtraRules: req.SystemPrompt,
-	})
-	if err := os.WriteFile(filepath.Join(seaturtDir, "SYSTEM.md"), []byte(systemMD), 0644); err != nil {
-		slog.Warn("failed to write SYSTEM.md", "err", err)
-	}
-
 	ag := &Agent{
 		ID:            agentID,
 		Name:          req.Name,
@@ -281,6 +271,10 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		_ = m.docker.RemoveContainer(ctx, containerID)
 		return nil, fmt.Errorf("load tools: %w", err)
 	}
+
+	// Copy system prompt template to workspace (rendered at chat time, not now).
+	promptsDir := m.cfg.GetPromptsDir()
+	copySystemPromptTemplate(promptsDir, seaturtDir, req.SystemPrompt)
 
 	// Create Executor (saves docker manager + container ID + tools dir path inside container)
 	executor := mcp.NewExecutor(m.docker, containerID, containerToolsDir)
@@ -577,8 +571,9 @@ func (m *Manager) GetConfig() *config.Config {
 	return m.cfg
 }
 
-// LoadSystemPrompt reads SYSTEM.md from the agent's workspace.
-// Returns DefaultSystemPrompt if the file doesn't exist or can't be read.
+// LoadSystemPrompt reads SYSTEM.md template from the agent's workspace,
+// renders it with current context (time, MCP servers, etc.), and returns the final prompt.
+// Returns DefaultSystemPrompt if the file doesn't exist or can't be read/rendered.
 func (m *Manager) LoadSystemPrompt(ag *Agent) string {
 	path := filepath.Join(ag.WorkspacePath, ".seaturt", "SYSTEM.md")
 	data, err := os.ReadFile(path)
@@ -586,7 +581,61 @@ func (m *Manager) LoadSystemPrompt(ag *Agent) string {
 		slog.Warn("failed to read SYSTEM.md, using default", "agent_id", ag.ID, "err", err)
 		return DefaultSystemPrompt
 	}
-	return string(data)
+
+	// Build MCP server list from registry (runtime state)
+	m.mu.RLock()
+	reg := m.registries[ag.ID]
+	m.mu.RUnlock()
+
+	var mcpServers []MCPServerConfig
+	if reg != nil {
+		for _, name := range reg.ServerNames() {
+			mcpServers = append(mcpServers, MCPServerConfig{Name: name})
+		}
+	}
+
+	now := time.Now()
+	cfg := SystemPromptConfig{
+		MCPServers:  mcpServers,
+		CurrentDate: now.Format("2006-01-02"),
+		CurrentTime: now.Format("15:04:05"),
+	}
+
+	rendered, err := RenderSystemTemplate(string(data), cfg)
+	if err != nil {
+		slog.Warn("failed to render SYSTEM.md template, returning raw content",
+			"agent_id", ag.ID, "err", err)
+		return string(data) // return raw content as fallback
+	}
+	return rendered
+}
+
+// copySystemPromptTemplate copies the system prompt template to the agent's workspace.
+// If extraRules is non-empty, it appends an "附加指令" section to the template.
+// Returns the path to the written file (empty string on error).
+func copySystemPromptTemplate(promptsDir, seaturtDir, extraRules string) string {
+	dstPath := filepath.Join(seaturtDir, "SYSTEM.md")
+
+	// Try to read the template file
+	srcPath := filepath.Join(promptsDir, "system.md")
+	content, err := os.ReadFile(srcPath)
+	if err != nil {
+		slog.Warn("failed to read system.md template for copy, using fallback",
+			"path", srcPath, "err", err)
+		// Write fallback: hardcoded base + desktop
+		content = []byte(systemPromptBase + systemPromptDesktop)
+	}
+
+	// Append extra rules if provided
+	if extraRules != "" {
+		content = append(content, []byte("\n## 附加指令\n\n"+extraRules+"\n")...)
+	}
+
+	if err := os.WriteFile(dstPath, content, 0644); err != nil {
+		slog.Warn("failed to write SYSTEM.md template", "err", err)
+		return ""
+	}
+	return dstPath
 }
 
 // GetMappedPorts returns the port mapping for a running agent's container.
@@ -598,7 +647,8 @@ func (m *Manager) GetMappedPorts(ctx context.Context, ag *Agent) (map[string]str
 }
 
 // containerMCPDiscoverTimeout is the timeout for running tools/list on a single MCP server.
-const containerMCPDiscoverTimeout = 10 * time.Second
+// Browser MCP needs extra time: Go client retries socket connection + daemon spawns npx subprocess.
+const containerMCPDiscoverTimeout = 60 * time.Second
 
 // loadMCPServers scans srcDir for MCP binaries/scripts, copies each to the container,
 // discovers tools via MCP protocol, and writes YAML files.
