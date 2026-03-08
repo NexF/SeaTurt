@@ -68,6 +68,13 @@ export interface ToolCallEvent {
   arguments: string
 }
 
+export interface ToolCallDeltaEvent {
+  index: number
+  id?: string
+  name?: string
+  arguments?: string
+}
+
 export interface ToolResultEvent {
   tool_call_id: string
   content: ContentBlock[]
@@ -79,8 +86,8 @@ export interface ReasoningDelta {
 }
 
 export interface StreamEvent {
-  type: "text_delta" | "reasoning_delta" | "tool_call" | "tool_result" | "error" | "done" | "cancelled"
-  data: TextDelta | ReasoningDelta | ToolCallEvent | ToolResultEvent | { message: string } | null
+  type: "text_delta" | "reasoning_delta" | "tool_call" | "tool_call_delta" | "tool_result" | "error" | "done" | "cancelled"
+  data: TextDelta | ReasoningDelta | ToolCallEvent | ToolCallDeltaEvent | ToolResultEvent | { message: string } | null
 }
 
 export interface FileEntry {
@@ -120,4 +127,5 @@ export interface UIToolCall {
   result?: ContentBlock[]
   isError?: boolean
   isComplete: boolean
+  isStreaming?: boolean
 }

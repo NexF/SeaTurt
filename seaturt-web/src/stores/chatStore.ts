@@ -265,16 +265,67 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               }
               break
             }
+            case "tool_call_delta": {
+              const delta = event.data as { index: number; id?: string; name?: string; arguments?: string }
+              if (delta.id && delta.name) {
+                // New tool call starts — create card
+                const tc: UIToolCall = {
+                  id: delta.id,
+                  name: delta.name,
+                  arguments: delta.arguments ?? "",
+                  isComplete: false,
+                  isStreaming: true,
+                }
+                toolCalls.push(tc)
+                segments.push({ type: "tool_call", toolCall: tc })
+              } else {
+                // Append arguments to the last streaming tool call
+                const lastIdx = toolCalls.length - 1
+                if (lastIdx >= 0 && toolCalls[lastIdx].isStreaming) {
+                  const updated = {
+                    ...toolCalls[lastIdx],
+                    arguments: toolCalls[lastIdx].arguments + (delta.arguments ?? ""),
+                  }
+                  toolCalls[lastIdx] = updated
+                  const segIdx = segments.findIndex(
+                    (seg) => seg.type === "tool_call" && seg.toolCall?.id === updated.id
+                  )
+                  if (segIdx !== -1) {
+                    segments[segIdx] = { type: "tool_call", toolCall: updated }
+                  }
+                }
+              }
+              break
+            }
             case "tool_call": {
               const tc = event.data as { id: string; name: string; arguments: string }
-              const uiTc: UIToolCall = {
-                id: tc.id,
-                name: tc.name,
-                arguments: tc.arguments,
-                isComplete: false,
+              // tool_call event is the "complete confirmation" after all deltas
+              const existingIdx = toolCalls.findIndex((t) => t && t.id === tc.id)
+              if (existingIdx !== -1) {
+                // Update with final complete arguments and mark streaming done
+                toolCalls[existingIdx] = {
+                  ...toolCalls[existingIdx],
+                  arguments: tc.arguments,
+                  isStreaming: false,
+                }
+                const segIdx = segments.findIndex(
+                  (seg) => seg.type === "tool_call" && seg.toolCall.id === tc.id
+                )
+                if (segIdx !== -1) {
+                  segments[segIdx] = { type: "tool_call", toolCall: toolCalls[existingIdx] }
+                }
+              } else {
+                // Fallback: no delta was received (non-streaming LLM or missed deltas)
+                const uiTc: UIToolCall = {
+                  id: tc.id,
+                  name: tc.name,
+                  arguments: tc.arguments,
+                  isComplete: false,
+                  isStreaming: false,
+                }
+                toolCalls.push(uiTc)
+                segments.push({ type: "tool_call", toolCall: uiTc })
               }
-              toolCalls.push(uiTc)
-              segments.push({ type: "tool_call", toolCall: uiTc })
               break
             }
             case "tool_result": {

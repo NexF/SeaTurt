@@ -75,6 +75,14 @@ type ToolCallEvent struct {
 	Arguments string `json:"arguments"`
 }
 
+// ToolCallDeltaEvent is the data for a "tool_call_delta" event.
+type ToolCallDeltaEvent struct {
+	Index     int    `json:"index"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
 // ToolResultEvent is the data for a "tool_result" event.
 type ToolResultEvent struct {
 	ToolCallID string             `json:"tool_call_id"`
@@ -164,22 +172,29 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 		var err error
 
 		if streamFn != nil {
-			resp, err = cfg.LLMClient.ChatCompletionStream(ctx, messages, toolDefs, func(delta llm.StreamDelta) error {
-				for _, choice := range delta.Choices {
-					if choice.Delta != nil {
-						if text := choice.Delta.Content.String(); text != "" {
-							streamFn(StreamEvent{
-								Type: "text_delta",
-								Data: TextDelta{Content: text},
-							})
-						}
-						if choice.Delta.ReasoningContent != "" {
-							streamFn(StreamEvent{
-								Type: "reasoning_delta",
-								Data: ReasoningDelta{Content: choice.Delta.ReasoningContent},
-							})
-						}
-					}
+			resp, err = cfg.LLMClient.ChatCompletionStreamV2(ctx, messages, toolDefs, func(data llm.StreamCallbackData) error {
+				if data.Content != "" {
+					streamFn(StreamEvent{
+						Type: "text_delta",
+						Data: TextDelta{Content: data.Content},
+					})
+				}
+				if data.ReasoningContent != "" {
+					streamFn(StreamEvent{
+						Type: "reasoning_delta",
+						Data: ReasoningDelta{Content: data.ReasoningContent},
+					})
+				}
+				for _, tcd := range data.ToolCallDeltas {
+					streamFn(StreamEvent{
+						Type: "tool_call_delta",
+						Data: ToolCallDeltaEvent{
+							Index:     tcd.Index,
+							ID:        tcd.ID,
+							Name:      tcd.Name,
+							Arguments: tcd.Arguments,
+						},
+					})
 				}
 				return nil
 			})

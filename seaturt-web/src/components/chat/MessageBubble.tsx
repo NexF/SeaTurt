@@ -1,10 +1,19 @@
-import ReactMarkdown from "react-markdown"
+import ReactMarkdown, { Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { useState } from "react"
 import { ChatMessage } from "@/types"
 import { cn } from "@/lib/utils"
 import ToolCallBlock from "./ToolCallBlock"
 import { Loader2, ChevronRight, ChevronDown, Brain } from "lucide-react"
+
+// Open all markdown links in a new tab
+const markdownComponents: Components = {
+  a: ({ href, children, ...props }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+      {children}
+    </a>
+  ),
+}
 
 interface Props {
   message: ChatMessage
@@ -50,7 +59,7 @@ export default function MessageBubble({ message, agentId }: Props) {
               if (seg.type === "text") {
                 return (
                   <div key={i} className="text-sm prose prose-sm dark:prose-invert max-w-none prose-pre:bg-[hsl(240,23%,9%)] prose-pre:rounded-lg prose-code:text-primary">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                       {seg.text}
                     </ReactMarkdown>
                   </div>
@@ -69,7 +78,7 @@ export default function MessageBubble({ message, agentId }: Props) {
               {isUser ? (
                 <p className="whitespace-pre-wrap m-0">{message.content}</p>
               ) : (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                   {message.content}
                 </ReactMarkdown>
               )}
@@ -109,7 +118,7 @@ function ReasoningBlock({ text, isStreaming }: { text: string; isStreaming: bool
       </button>
       {isOpen && (
         <div className="px-3 pb-2 text-xs text-muted-foreground/80 prose prose-sm dark:prose-invert max-w-none border-t border-border/30">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{text}</ReactMarkdown>
         </div>
       )}
     </div>

@@ -79,6 +79,7 @@ type ChatMessage struct {
 
 // ToolCall represents a function call requested by the model.
 type ToolCall struct {
+	Index    int          `json:"index,omitempty"` // present in streaming deltas
 	ID       string       `json:"id"`
 	Type     string       `json:"type"` // "function"
 	Function FunctionCall `json:"function"`
@@ -247,6 +248,25 @@ type StreamDelta struct {
 	Choices []Choice `json:"choices"`
 }
 
+// ToolCallDelta carries incremental tool call data from an SSE chunk.
+type ToolCallDelta struct {
+	Index     int    `json:"index"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+// StreamCallbackData is the structured data passed to stream callbacks,
+// carrying text deltas, reasoning deltas, and/or tool call deltas.
+type StreamCallbackData struct {
+	Content          string          `json:"content,omitempty"`
+	ReasoningContent string          `json:"reasoning_content,omitempty"`
+	ToolCallDeltas   []ToolCallDelta `json:"tool_call_deltas,omitempty"`
+}
+
+// StreamCallbackV2 is the new-style callback that receives structured data.
+type StreamCallbackV2 func(data StreamCallbackData) error
+
 // --- API calls ---
 
 // ChatCompletion performs a non-streaming chat completion.
@@ -328,6 +348,16 @@ type StreamCallback func(delta StreamDelta) error
 // The callback is invoked for each SSE delta. After the stream ends,
 // this returns the fully assembled ChatResponse.
 func (c *Client) ChatCompletionStream(ctx context.Context, messages []ChatMessage, tools []ToolDef, cb StreamCallback) (*ChatResponse, error) {
+	return c.chatCompletionStreamInternal(ctx, messages, tools, cb, nil)
+}
+
+// ChatCompletionStreamV2 performs a streaming chat completion with structured callbacks.
+// The cbV2 callback receives text, reasoning, and tool call deltas in a unified structure.
+func (c *Client) ChatCompletionStreamV2(ctx context.Context, messages []ChatMessage, tools []ToolDef, cbV2 StreamCallbackV2) (*ChatResponse, error) {
+	return c.chatCompletionStreamInternal(ctx, messages, tools, nil, cbV2)
+}
+
+func (c *Client) chatCompletionStreamInternal(ctx context.Context, messages []ChatMessage, tools []ToolDef, cb StreamCallback, cbV2 StreamCallbackV2) (*ChatResponse, error) {
 	body, err := c.buildRequestBody(messages, tools, true)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -385,7 +415,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, messages []ChatMessag
 		"ttfb", time.Since(start),
 	)
 
-	assembled, err := c.consumeSSE(resp.Body, cb)
+	assembled, err := c.consumeSSE(resp.Body, cb, cbV2)
 	elapsed := time.Since(start)
 	if err != nil {
 		slog.Error("llm stream error",
@@ -414,14 +444,16 @@ func (c *Client) ChatCompletionStream(ctx context.Context, messages []ChatMessag
 }
 
 // consumeSSE reads SSE lines, assembles deltas into a full ChatResponse.
-func (c *Client) consumeSSE(r io.Reader, cb StreamCallback) (*ChatResponse, error) {
+func (c *Client) consumeSSE(r io.Reader, cb StreamCallback, cbV2 StreamCallbackV2) (*ChatResponse, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	assembled := &ChatResponse{}
 	var contentBuilder strings.Builder
 	var reasoningBuilder strings.Builder
-	toolCallsMap := make(map[int]*ToolCall) // index -> accumulated tool call
+	toolCallsMap := make(map[int]*ToolCall) // key -> accumulated tool call
+	toolCallNextKey := 0                     // next key to use when Anthropic reuses index=0 for a new tool call
+	lastActiveKey := make(map[int]int)       // original index -> last active key (for Anthropic index reuse)
 	var finishReason string
 
 	for scanner.Scan() {
@@ -463,23 +495,80 @@ func (c *Client) consumeSSE(r io.Reader, cb StreamCallback) (*ChatResponse, erro
 			}
 			if text := choice.Delta.Content.String(); text != "" {
 				contentBuilder.WriteString(text)
+				if cbV2 != nil {
+					if err := cbV2(StreamCallbackData{Content: text}); err != nil {
+						return nil, err
+					}
+				}
 			}
 			if choice.Delta.ReasoningContent != "" {
 				reasoningBuilder.WriteString(choice.Delta.ReasoningContent)
-			}
-			for _, tc := range choice.Delta.ToolCalls {
-				existing, ok := toolCallsMap[choice.Index]
-				if !ok {
-					cp := tc
-					toolCallsMap[choice.Index] = &cp
-				} else {
-					// Append arguments incrementally
-					existing.Function.Arguments += tc.Function.Arguments
-					if tc.ID != "" {
-						existing.ID = tc.ID
+				if cbV2 != nil {
+					if err := cbV2(StreamCallbackData{ReasoningContent: choice.Delta.ReasoningContent}); err != nil {
+						return nil, err
 					}
-					if tc.Function.Name != "" {
-						existing.Function.Name = tc.Function.Name
+				}
+			}
+			if len(choice.Delta.ToolCalls) > 0 {
+				var deltas []ToolCallDelta
+				for _, tc := range choice.Delta.ToolCalls {
+					origIdx := tc.Index // original index from the API (Anthropic always sends 0)
+
+					// Resolve the actual key for this original index.
+					// If we've seen this index before and the delta doesn't carry
+					// a new ID, use the last active key for that index.
+					tcIdx := origIdx
+					if activeKey, mapped := lastActiveKey[origIdx]; mapped {
+						tcIdx = activeKey
+					}
+
+					existing, ok := toolCallsMap[tcIdx]
+
+					// Anthropic reuses index=0 for every tool call.
+					// Detect when a new tool call starts on the same index by checking
+					// if the delta carries a new non-empty ID that differs from the
+					// existing accumulated entry.
+					if ok && tc.ID != "" && existing.ID != "" && tc.ID != existing.ID {
+						// This is a brand-new tool call that happens to share the same index.
+						// Assign it a unique key so it gets its own slot.
+						tcIdx = toolCallNextKey
+						toolCallNextKey++
+						ok = false // force creation of a new entry
+					}
+
+					if !ok {
+						cp := tc
+						cp.Index = tcIdx // store with the (possibly remapped) key
+						toolCallsMap[tcIdx] = &cp
+						// Track the highest key for sequential assembly later
+						if tcIdx >= toolCallNextKey {
+							toolCallNextKey = tcIdx + 1
+						}
+					} else {
+						// Append arguments incrementally
+						existing.Function.Arguments += tc.Function.Arguments
+						if tc.ID != "" {
+							existing.ID = tc.ID
+						}
+						if tc.Function.Name != "" {
+							existing.Function.Name = tc.Function.Name
+						}
+					}
+
+					// Update the active key mapping so subsequent deltas
+					// without an ID are directed to the correct tool call.
+					lastActiveKey[origIdx] = tcIdx
+
+					deltas = append(deltas, ToolCallDelta{
+						Index:     tcIdx,
+						ID:        tc.ID,
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					})
+				}
+				if cbV2 != nil && len(deltas) > 0 {
+					if err := cbV2(StreamCallbackData{ToolCallDeltas: deltas}); err != nil {
+						return nil, err
 					}
 				}
 			}
@@ -494,7 +583,7 @@ func (c *Client) consumeSSE(r io.Reader, cb StreamCallback) (*ChatResponse, erro
 		Content:          Content{NewTextContent(contentBuilder.String())},
 		ReasoningContent: reasoningBuilder.String(),
 	}
-	for i := 0; i < len(toolCallsMap); i++ {
+	for i := 0; i < toolCallNextKey; i++ {
 		if tc, ok := toolCallsMap[i]; ok {
 			msg.ToolCalls = append(msg.ToolCalls, *tc)
 		}
