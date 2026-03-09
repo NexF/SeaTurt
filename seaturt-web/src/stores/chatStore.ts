@@ -1,45 +1,43 @@
 import { create } from "zustand"
 import { ChatMessage, UIToolCall, ContentBlock, Message } from "@/types"
+import { useAgentStore } from "@/stores/agentStore"
 import * as api from "@/services/api"
 
-interface PerAgentState {
+interface PerSessionState {
   messages: ChatMessage[]
   isStreaming: boolean
   abortController: AbortController | null
 }
 
 interface ChatStore {
-  /** Per-agent chat state keyed by agent ID */
-  agentStates: Record<string, PerAgentState>
+  sessionStates: Record<string, PerSessionState>
 
-  /** Helpers to read per-agent state */
-  getMessages: (agentId: string) => ChatMessage[]
-  getIsStreaming: (agentId: string) => boolean
+  getMessages: (sessionId: string) => ChatMessage[]
+  getIsStreaming: (sessionId: string) => boolean
 
-  loadHistory: (agentId: string) => Promise<void>
-  clearHistory: (agentId: string) => Promise<void>
-  sendMessage: (agentId: string, text: string, images?: File[]) => void
-  stopStreaming: (agentId: string) => void
-  cancelToolCall: (agentId: string, toolCallId: string) => void
+  loadHistory: (agentId: string, sessionId: string) => Promise<void>
+  clearHistory: (agentId: string, sessionId: string) => Promise<void>
+  sendMessage: (agentId: string, sessionId: string, text: string, images?: File[]) => void
+  stopStreaming: (agentId: string, sessionId: string) => void
+  cancelToolCall: (agentId: string, sessionId: string, toolCallId: string) => void
   reset: () => void
 }
 
-const emptyState: PerAgentState = { messages: [], isStreaming: false, abortController: null }
+const emptyState: PerSessionState = { messages: [], isStreaming: false, abortController: null }
 
-function getAgentState(states: Record<string, PerAgentState>, agentId: string): PerAgentState {
-  return states[agentId] || emptyState
+function getSessionState(states: Record<string, PerSessionState>, sessionId: string): PerSessionState {
+  return states[sessionId] || emptyState
 }
 
-function setAgentState(
-  states: Record<string, PerAgentState>,
-  agentId: string,
-  patch: Partial<PerAgentState>
-): Record<string, PerAgentState> {
-  const prev = states[agentId] || { ...emptyState }
-  return { ...states, [agentId]: { ...prev, ...patch } }
+function setSessionState(
+  states: Record<string, PerSessionState>,
+  sessionId: string,
+  patch: Partial<PerSessionState>
+): Record<string, PerSessionState> {
+  const prev = states[sessionId] || { ...emptyState }
+  return { ...states, [sessionId]: { ...prev, ...patch } }
 }
 
-// Convert a sequence of history Messages into ChatMessages with proper segments.
 function convertHistoryMessages(msgs: Message[]): ChatMessage[] {
   const result: ChatMessage[] = []
   let currentAssistant: ChatMessage | null = null
@@ -157,38 +155,35 @@ function convertHistoryMessages(msgs: Message[]): ChatMessage[] {
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
-  agentStates: {},
+  sessionStates: {},
 
-  getMessages: (agentId) => getAgentState(get().agentStates, agentId).messages,
-  getIsStreaming: (agentId) => getAgentState(get().agentStates, agentId).isStreaming,
+  getMessages: (sessionId) => getSessionState(get().sessionStates, sessionId).messages,
+  getIsStreaming: (sessionId) => getSessionState(get().sessionStates, sessionId).isStreaming,
 
-  loadHistory: async (agentId) => {
-    const state = getAgentState(get().agentStates, agentId)
-    // If already streaming for this agent, don't reload — keep current state
+  loadHistory: async (agentId, sessionId) => {
+    const state = getSessionState(get().sessionStates, sessionId)
     if (state.isStreaming) return
-
-    // If already has messages loaded, don't re-fetch (component just re-showed)
     if (state.messages.length > 0) return
 
-    set((s) => ({ agentStates: setAgentState(s.agentStates, agentId, { messages: [] }) }))
+    set((s) => ({ sessionStates: setSessionState(s.sessionStates, sessionId, { messages: [] }) }))
     try {
-      const history = await api.getHistory(agentId)
+      const history = await api.getHistory(agentId, sessionId)
       const msgs = convertHistoryMessages(history)
-      set((s) => ({ agentStates: setAgentState(s.agentStates, agentId, { messages: msgs }) }))
+      set((s) => ({ sessionStates: setSessionState(s.sessionStates, sessionId, { messages: msgs }) }))
     } catch (err) {
       console.warn("Failed to load history:", err)
-      set((s) => ({ agentStates: setAgentState(s.agentStates, agentId, { messages: [] }) }))
+      set((s) => ({ sessionStates: setSessionState(s.sessionStates, sessionId, { messages: [] }) }))
     }
   },
 
-  clearHistory: async (agentId) => {
-    await api.deleteHistory(agentId)
+  clearHistory: async (agentId, sessionId) => {
+    await api.deleteHistory(agentId, sessionId)
     set((s) => ({
-      agentStates: setAgentState(s.agentStates, agentId, { messages: [] }),
+      sessionStates: setSessionState(s.sessionStates, sessionId, { messages: [] }),
     }))
   },
 
-  sendMessage: (agentId, text, images) => {
+  sendMessage: (agentId, sessionId, text, images) => {
     const userMsg: ChatMessage = {
       id: `user_${Date.now()}`,
       role: "user",
@@ -214,9 +209,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
 
     set((s) => {
-      const prev = getAgentState(s.agentStates, agentId)
+      const prev = getSessionState(s.sessionStates, sessionId)
       return {
-        agentStates: setAgentState(s.agentStates, agentId, {
+        sessionStates: setSessionState(s.sessionStates, sessionId, {
           messages: [...prev.messages, userMsg, assistantMsg],
           isStreaming: true,
         }),
@@ -225,10 +220,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     const controller = api.streamChat(
       agentId,
+      sessionId,
       { text, images },
       (event) => {
         set((s) => {
-          const prev = getAgentState(s.agentStates, agentId)
+          const prev = getSessionState(s.sessionStates, sessionId)
           const msgs = [...prev.messages]
           const last = { ...msgs[msgs.length - 1] }
           msgs[msgs.length - 1] = last
@@ -268,7 +264,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             case "tool_call_delta": {
               const delta = event.data as { index: number; id?: string; name?: string; arguments?: string }
               if (delta.id && delta.name) {
-                // New tool call starts — create card
                 const tc: UIToolCall = {
                   id: delta.id,
                   name: delta.name,
@@ -279,7 +274,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 toolCalls.push(tc)
                 segments.push({ type: "tool_call", toolCall: tc })
               } else {
-                // Append arguments to the last streaming tool call
                 const lastIdx = toolCalls.length - 1
                 if (lastIdx >= 0 && toolCalls[lastIdx].isStreaming) {
                   const updated = {
@@ -299,10 +293,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             }
             case "tool_call": {
               const tc = event.data as { id: string; name: string; arguments: string }
-              // tool_call event is the "complete confirmation" after all deltas
               const existingIdx = toolCalls.findIndex((t) => t && t.id === tc.id)
               if (existingIdx !== -1) {
-                // Update with final complete arguments and mark streaming done
                 toolCalls[existingIdx] = {
                   ...toolCalls[existingIdx],
                   arguments: tc.arguments,
@@ -315,7 +307,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                   segments[segIdx] = { type: "tool_call", toolCall: toolCalls[existingIdx] }
                 }
               } else {
-                // Fallback: no delta was received (non-streaming LLM or missed deltas)
                 const uiTc: UIToolCall = {
                   id: tc.id,
                   name: tc.name,
@@ -370,6 +361,26 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               last.isStreaming = false
               break
             }
+            case "session_updated": {
+              const update = event.data as { session_id: string; title: string }
+              if (update.session_id && update.title) {
+                // Directly update local state — backend already persisted the title
+                useAgentStore.setState((s) => {
+                  const newSessions = { ...s.sessions }
+                  for (const aid of Object.keys(newSessions)) {
+                    const list = newSessions[aid]
+                    if (list?.some((sess) => sess.id === update.session_id)) {
+                      newSessions[aid] = list.map((sess) =>
+                        sess.id === update.session_id ? { ...sess, title: update.title } : sess
+                      )
+                      break
+                    }
+                  }
+                  return { sessions: newSessions }
+                })
+              }
+              break
+            }
             case "cancelled": {
               for (let i = 0; i < toolCalls.length; i++) {
                 if (!toolCalls[i].isComplete) {
@@ -397,18 +408,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
           last.segments = segments
           last.toolCalls = toolCalls
-          return { agentStates: setAgentState(s.agentStates, agentId, { ...prev, messages: msgs }) }
+          return { sessionStates: setSessionState(s.sessionStates, sessionId, { ...prev, messages: msgs }) }
         })
       },
       () => {
         set((s) => ({
-          agentStates: setAgentState(s.agentStates, agentId, { isStreaming: false, abortController: null }),
+          sessionStates: setSessionState(s.sessionStates, sessionId, { isStreaming: false, abortController: null }),
         }))
       },
       (err) => {
         console.error("Stream error:", err)
         set((s) => {
-          const prev = getAgentState(s.agentStates, agentId)
+          const prev = getSessionState(s.sessionStates, sessionId)
           const msgs = [...prev.messages]
           if (msgs.length > 0) {
             const last = { ...msgs[msgs.length - 1] }
@@ -417,7 +428,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             msgs[msgs.length - 1] = last
           }
           return {
-            agentStates: setAgentState(s.agentStates, agentId, {
+            sessionStates: setSessionState(s.sessionStates, sessionId, {
               messages: msgs,
               isStreaming: false,
               abortController: null,
@@ -428,19 +439,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     )
 
     set((s) => ({
-      agentStates: setAgentState(s.agentStates, agentId, { abortController: controller }),
+      sessionStates: setSessionState(s.sessionStates, sessionId, { abortController: controller }),
     }))
   },
 
-  stopStreaming: (agentId) => {
-    const state = getAgentState(get().agentStates, agentId)
+  stopStreaming: (agentId, sessionId) => {
+    const state = getSessionState(get().sessionStates, sessionId)
     if (!state.abortController) return
 
-    api.cancelChat(agentId).catch(() => {})
+    api.cancelChat(agentId, sessionId).catch(() => {})
     state.abortController.abort()
 
     set((s) => {
-      const prev = getAgentState(s.agentStates, agentId)
+      const prev = getSessionState(s.sessionStates, sessionId)
       const msgs = [...prev.messages]
       if (msgs.length > 0) {
         const last = { ...msgs[msgs.length - 1] }
@@ -460,7 +471,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         msgs[msgs.length - 1] = last
       }
       return {
-        agentStates: setAgentState(s.agentStates, agentId, {
+        sessionStates: setSessionState(s.sessionStates, sessionId, {
           messages: msgs,
           isStreaming: false,
           abortController: null,
@@ -469,11 +480,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
   },
 
-  cancelToolCall: (agentId, toolCallId) => {
-    api.cancelToolCall(agentId, toolCallId).catch(() => {})
+  cancelToolCall: (agentId, sessionId, toolCallId) => {
+    api.cancelToolCall(agentId, sessionId, toolCallId).catch(() => {})
 
     set((s) => {
-      const prev = getAgentState(s.agentStates, agentId)
+      const prev = getSessionState(s.sessionStates, sessionId)
       const msgs = [...prev.messages]
       const last = { ...msgs[msgs.length - 1] }
       if (last.toolCalls) {
@@ -491,9 +502,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         )
       }
       msgs[msgs.length - 1] = last
-      return { agentStates: setAgentState(s.agentStates, agentId, { ...prev, messages: msgs }) }
+      return { sessionStates: setSessionState(s.sessionStates, sessionId, { ...prev, messages: msgs }) }
     })
   },
 
-  reset: () => set({ agentStates: {} }),
+  reset: () => set({ sessionStates: {} }),
 }))

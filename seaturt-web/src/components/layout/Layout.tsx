@@ -25,21 +25,22 @@ function useBreakpoint() {
 
 export default function Layout() {
   const selectedAgentId = useAgentStore((s) => s.selectedAgentId)
+  const selectedSessionId = useAgentStore((s) => s.selectedSessionId)
   const agents = useAgentStore((s) => s.agents)
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false)
 
-  // Track all agent IDs that have been visited so their ChatPanel instances stay alive
-  const visitedAgentIdsRef = useRef<Set<string>>(new Set())
-  if (selectedAgentId) {
-    visitedAgentIdsRef.current.add(selectedAgentId)
+  // Track all session IDs that have been visited so their ChatPanel instances stay alive
+  const visitedSessionsRef = useRef<Map<string, { agentId: string; sessionId: string }>>(new Map())
+  if (selectedAgentId && selectedSessionId) {
+    visitedSessionsRef.current.set(selectedSessionId, { agentId: selectedAgentId, sessionId: selectedSessionId })
   }
-  // Clean up visited IDs for agents that no longer exist
+  // Clean up visited sessions for agents that no longer exist
   const agentIdSet = new Set(agents.map((a) => a.id))
-  for (const id of visitedAgentIdsRef.current) {
-    if (!agentIdSet.has(id)) visitedAgentIdsRef.current.delete(id)
+  for (const [sid, entry] of visitedSessionsRef.current) {
+    if (!agentIdSet.has(entry.agentId)) visitedSessionsRef.current.delete(sid)
   }
-  const visitedAgentIds = Array.from(visitedAgentIdsRef.current)
+  const visitedSessions = Array.from(visitedSessionsRef.current.values())
 
   const bp = useBreakpoint()
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
@@ -94,18 +95,19 @@ export default function Layout() {
         )}
 
         {/* Keep-alive: render all visited ChatPanels, hide non-active ones */}
-        {visitedAgentIds.map((id) => {
-          const agent = agents.find((a) => a.id === id)
+        {visitedSessions.map(({ agentId, sessionId }) => {
+          const agent = agents.find((a) => a.id === agentId)
           if (!agent) return null
-          const isActive = id === selectedAgentId
+          const isActive = sessionId === selectedSessionId
           return (
             <div
-              key={id}
+              key={sessionId}
               className="flex flex-col h-full"
               style={{ display: isActive ? "flex" : "none" }}
             >
               <ChatPanel
                 agent={agent}
+                sessionId={sessionId}
                 onToggleWorkspace={() => setRightPanelOpen((v) => !v)}
                 workspaceOpen={rightPanelOpen}
               />
@@ -113,8 +115,8 @@ export default function Layout() {
           )
         })}
 
-        {/* Show welcome page only when no agent is selected */}
-        {!selectedAgentId && <WelcomePage />}
+        {/* Show welcome page only when no session is selected */}
+        {!selectedSessionId && <WelcomePage />}
       </main>
 
       {/* Right panel: always on desktop, floating on tablet, hidden on mobile (accessible via toggle) */}

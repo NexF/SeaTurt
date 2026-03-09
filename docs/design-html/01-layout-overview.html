@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SeaTurt 设计稿 — 01 整体布局 &amp; 核心概念</title>
+<style>
+  :root {
+    --bg-main: #1e1e2e;
+    --bg-sidebar: #181825;
+    --bg-deepest: #11111b;
+    --text-primary: #cdd6f4;
+    --text-secondary: #6c7086;
+    --accent: #89b4fa;
+    --border: #313244;
+    --user-bubble: #313244;
+    --success: #a6e3a1;
+    --warning: #f9e2af;
+    --error: #f38ba8;
+    --orange: #fab387;
+    --radius-bubble: 12px;
+    --radius-card: 8px;
+    --radius-btn: 6px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Inter", -apple-system, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    background: #0e0e16;
+    color: var(--text-primary);
+    padding: 40px 32px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  h2 { font-size: 22px; font-weight: 600; margin: 48px 0 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 17px; font-weight: 600; margin: 32px 0 12px; color: var(--accent); }
+  p { margin: 8px 0; color: var(--text-secondary); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 13px;
+    background: var(--bg-deepest);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--orange);
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .badge-blue { background: rgba(137,180,250,0.15); color: var(--accent); }
+  .badge-green { background: rgba(166,227,161,0.15); color: var(--success); }
+  .badge-gray { background: rgba(108,112,134,0.15); color: var(--text-secondary); }
+
+  .nav-bar {
+    display: flex; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 32px; padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-bar a {
+    padding: 6px 14px; border-radius: var(--radius-btn);
+    background: var(--user-bubble); color: var(--text-primary);
+    font-size: 13px; transition: background 0.15s;
+  }
+  .nav-bar a:hover { background: var(--accent); color: var(--bg-deepest); text-decoration: none; }
+  .nav-bar a.active { background: var(--accent); color: var(--bg-deepest); }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-size: 13px; }
+  th { background: var(--bg-deepest); color: var(--text-primary); font-weight: 600; }
+  td { color: var(--text-secondary); }
+  tr:nth-child(even) td { background: rgba(17,17,27,0.4); }
+
+  .mockup-container {
+    background: var(--bg-deepest);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+    margin: 20px 0;
+  }
+
+  /* 三栏布局 mockup */
+  .layout-mockup {
+    display: flex;
+    height: 520px;
+    font-size: 12px;
+  }
+  .layout-mockup .sidebar-left {
+    width: 240px;
+    min-width: 240px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+  }
+  .layout-mockup .main-area {
+    flex: 1;
+    background: var(--bg-main);
+    display: flex;
+    flex-direction: column;
+  }
+  .layout-mockup .sidebar-right {
+    width: 320px;
+    min-width: 320px;
+    background: var(--bg-sidebar);
+    border-left: 1px solid var(--border);
+    padding: 16px;
+  }
+  .sidebar-logo {
+    font-size: 18px; font-weight: 700; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .sidebar-logo span { font-size: 22px; }
+  .btn-new-agent {
+    width: 100%; padding: 8px; border: 1px dashed var(--border);
+    border-radius: var(--radius-btn); background: transparent;
+    color: var(--text-secondary); cursor: pointer; font-size: 12px;
+    margin-bottom: 16px; transition: all 0.15s;
+  }
+  .btn-new-agent:hover { border-color: var(--accent); color: var(--accent); }
+
+  .agent-card {
+    background: var(--bg-deepest);
+    border-radius: var(--radius-card);
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .agent-card:hover { border-color: var(--border); }
+  .agent-card.active { border-color: var(--accent); }
+  .agent-card .agent-header {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .agent-card .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+  .agent-card .status-dot.running { background: var(--success); }
+  .agent-card .status-dot.stopped { background: var(--text-secondary); }
+  .agent-card .agent-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+  .agent-card .agent-model { font-size: 11px; color: var(--text-secondary); margin-top: 2px; margin-left: 16px; }
+
+  .session-list { margin: 6px 0 0 16px; }
+  .session-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 5px 8px; border-radius: 4px; cursor: pointer;
+    font-size: 12px; color: var(--text-secondary);
+    transition: background 0.1s;
+  }
+  .session-item:hover { background: rgba(137,180,250,0.08); }
+  .session-item.active { background: rgba(137,180,250,0.12); color: var(--text-primary); }
+  .session-item .time { font-size: 10px; color: var(--text-secondary); }
+
+  .btn-new-session {
+    display: flex; align-items: center; gap: 4px;
+    padding: 4px 8px; font-size: 11px;
+    color: var(--accent); cursor: pointer; border: none; background: transparent;
+  }
+  .btn-new-session:hover { text-decoration: underline; }
+
+  /* 顶栏 */
+  .chat-topbar {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-main);
+  }
+  .chat-topbar .row1 {
+    display: flex; align-items: center; gap: 8px; font-size: 13px;
+  }
+  .chat-topbar .row1 .name { font-weight: 600; }
+  .chat-topbar .row1 .model { color: var(--text-secondary); font-size: 12px; }
+  .chat-topbar .row1 .status {
+    padding: 2px 8px; border-radius: 10px; font-size: 11px;
+    background: rgba(166,227,161,0.15); color: var(--success);
+  }
+  .chat-topbar .row1 .actions { margin-left: auto; display: flex; gap: 6px; }
+  .chat-topbar .row1 .actions button {
+    background: var(--user-bubble); border: none; color: var(--text-secondary);
+    width: 28px; height: 28px; border-radius: var(--radius-btn);
+    cursor: pointer; font-size: 14px;
+  }
+  .chat-topbar .row1 .actions button:hover { color: var(--text-primary); }
+  .chat-topbar .row2 {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 6px; font-size: 12px; color: var(--text-secondary);
+  }
+  .chat-topbar .row2 .session-title { color: var(--text-primary); cursor: text; }
+
+  /* 对话区域占位 */
+  .chat-body {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: var(--text-secondary); font-size: 13px; opacity: 0.5;
+  }
+
+  /* 输入栏 */
+  .input-bar {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .input-bar .attach-btn {
+    background: transparent; border: none; color: var(--text-secondary);
+    font-size: 18px; cursor: pointer;
+  }
+  .input-bar .input-field {
+    flex: 1; background: var(--user-bubble); border: 1px solid var(--border);
+    border-radius: var(--radius-btn); padding: 8px 12px;
+    color: var(--text-primary); font-size: 13px; outline: none;
+  }
+  .input-bar .input-field::placeholder { color: var(--text-secondary); }
+  .input-bar .send-btn {
+    background: var(--accent); color: var(--bg-deepest); border: none;
+    padding: 8px 16px; border-radius: var(--radius-btn);
+    font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+
+  /* 右侧栏 */
+  .ws-section-title {
+    font-size: 12px; font-weight: 600; color: var(--text-secondary);
+    margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+  }
+  .file-tree-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 0; font-size: 12px; color: var(--text-secondary); cursor: pointer;
+  }
+  .file-tree-item:hover { color: var(--text-primary); }
+  .file-tree-item.folder { color: var(--accent); }
+  .desktop-preview {
+    width: 100%; aspect-ratio: 16/9;
+    background: var(--bg-deepest);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-secondary); font-size: 11px;
+    margin-top: 12px; position: relative; overflow: hidden;
+  }
+  .desktop-preview .overlay {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.3); cursor: pointer;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .desktop-preview:hover .overlay { opacity: 1; }
+  .desktop-preview .overlay span { font-size: 12px; color: #fff; }
+
+  /* 尺寸标注 */
+  .dimension-label {
+    display: flex; align-items: center; justify-content: center;
+    padding: 6px; font-size: 11px; color: var(--accent);
+    background: rgba(137,180,250,0.06); border-top: 1px dashed rgba(137,180,250,0.3);
+  }
+  .dimension-row {
+    display: flex;
+  }
+  .dimension-row .dim { flex: 1; text-align: center; }
+
+  .theme-toggle {
+    margin-top: auto; padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--text-secondary); cursor: pointer;
+  }
+
+  .note-box {
+    background: rgba(137,180,250,0.06);
+    border-left: 3px solid var(--accent);
+    padding: 12px 16px;
+    border-radius: 0 var(--radius-card) var(--radius-card) 0;
+    margin: 12px 0;
+    font-size: 13px;
+  }
+  .note-box strong { color: var(--text-primary); }
+</style>
+</head>
+<body>
+
+<!-- 导航 -->
+<nav class="nav-bar">
+  <a href="01-layout-overview.html" class="active">01 整体布局</a>
+  <a href="02-sidebar.html">02 侧边栏</a>
+  <a href="03-chat-panel.html">03 对话面板</a>
+  <a href="04-workspace.html">04 Workspace</a>
+  <a href="05-interactions.html">05 交互细节</a>
+  <a href="06-theme-responsive.html">06 主题 &amp; 响应式</a>
+  <a href="07-cron-job.html">07 定时任务</a>
+</nav>
+
+<h1>SeaTurt UI 设计稿</h1>
+<p>基于实际前端实现（React + Tailwind + Catppuccin Mocha），持续更新。当前涵盖 v0.1.1 桌面预览优化、v0.1.2 取消机制 UI、v0.2.0 Session 多会话。</p>
+
+<!-- ===== 核心概念 ===== -->
+<h2>核心概念（v0.2.0）</h2>
+
+<h3>Agent vs Session</h3>
+<table>
+  <thead><tr><th>概念</th><th>性质</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Agent</strong></td><td><span class="badge badge-blue">重量级</span></td><td>绑定容器（Docker + 桌面环境 + MCP Server），创建/启停成本高</td></tr>
+    <tr><td><strong>Session</strong></td><td><span class="badge badge-green">轻量级</span></td><td>Agent 下的一次独立对话，共享 Agent 的容器和工具，只有消息历史是隔离的</td></tr>
+  </tbody>
+</table>
+
+<div class="note-box">
+  <strong>类比：</strong>Agent ≈ ChatGPT 中的 GPT（一个配置好的环境），Session ≈ 一次对话（conversation）。
+</div>
+
+<h3>关键规则</h3>
+<table>
+  <thead><tr><th>规则</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>一个 Agent 下可以有多个 Session</td><td>所有 Session <strong>共享同一个容器</strong>（文件系统、桌面、MCP Server）</td></tr>
+    <tr><td>每个 Session 有独立的消息历史</td><td>独立的 LLM 上下文</td></tr>
+    <tr><td>新建 Session 是即时的</td><td>不需要启动容器</td></tr>
+    <tr><td>删除 Session 只删消息</td><td>不影响容器</td></tr>
+    <tr><td>Agent 停止后</td><td>所有 Session 的历史保留，重启后可继续</td></tr>
+  </tbody>
+</table>
+
+<!-- ===== 整体布局 ===== -->
+<h2>整体布局</h2>
+
+<p>三栏式结构：左侧栏（固定 240px） + 中间对话区（自适应） + 右侧栏（320px，可收起）。</p>
+
+<!-- Live Mockup -->
+<div class="mockup-container">
+  <div class="layout-mockup">
+    <!-- 左侧栏 -->
+    <div class="sidebar-left">
+      <div class="sidebar-logo"><span>🐢</span> SeaTurt</div>
+      <button class="btn-new-agent">+ 新建 Agent</button>
+
+      <!-- Agent: coder -->
+      <div class="agent-card active">
+        <div class="agent-header">
+          <div class="status-dot running"></div>
+          <span class="agent-name">coder</span>
+        </div>
+        <div class="agent-model">gpt-4o</div>
+        <button class="btn-new-session">+ 新对话</button>
+        <div class="session-list">
+          <div class="session-item"><span>整理周报</span><span class="time">3月5日</span></div>
+          <div class="session-item"><span>数据分析</span><span class="time">3月6日</span></div>
+          <div class="session-item active"><span>● 代码审查</span><span class="time">3月8日</span></div>
+        </div>
+      </div>
+
+      <!-- Agent: writer -->
+      <div class="agent-card">
+        <div class="agent-header">
+          <div class="status-dot stopped"></div>
+          <span class="agent-name">writer</span>
+        </div>
+        <div class="agent-model">claude-3.5-sonnet</div>
+      </div>
+
+      <div class="theme-toggle">🌙 深色主题</div>
+    </div>
+
+    <!-- 中间对话区 -->
+    <div class="main-area">
+      <div class="chat-topbar">
+        <div class="row1">
+          <span class="name">coder</span>
+          <span class="model">(gpt-4o)</span>
+          <span class="status">● Running</span>
+          <div class="actions">
+            <button title="定时任务">⏰</button>
+            <button title="设置">⚙</button>
+            <button title="Workspace">📁</button>
+          </div>
+        </div>
+        <div class="row2">
+          <span>📝</span>
+          <span class="session-title">代码审查</span>
+          <button class="btn-new-session" style="margin-left:auto">+ 新对话</button>
+        </div>
+      </div>
+      <div class="chat-body">对话消息区域（详见 03-chat-panel.html）</div>
+      <div class="input-bar">
+        <button class="attach-btn">📎</button>
+        <input class="input-field" placeholder="在这里输入消息..." />
+        <button class="send-btn">发送</button>
+      </div>
+    </div>
+
+    <!-- 右侧栏 -->
+    <div class="sidebar-right">
+      <div class="ws-section-title">📁 Workspace</div>
+      <div style="margin-left:4px">
+        <div class="file-tree-item folder">▸ .seaturt/</div>
+        <div class="file-tree-item folder">▾ 周报/</div>
+        <div class="file-tree-item" style="padding-left:16px">2025-W10.md</div>
+        <div class="file-tree-item" style="padding-left:16px">2025-W11.md</div>
+        <div class="file-tree-item folder">▾ 整理/</div>
+        <div class="file-tree-item" style="padding-left:16px">旅行计划.xlsx</div>
+        <div class="file-tree-item" style="padding-left:16px">会议纪要.docx</div>
+        <div class="file-tree-item">数据分析.csv</div>
+        <div class="file-tree-item">统计图表.png</div>
+      </div>
+
+      <div class="ws-section-title" style="margin-top:20px">🖥 桌面 (实时预览)</div>
+      <div class="desktop-preview">
+        <span style="opacity:0.6">KDE 桌面实时流 (iframe view-only)</span>
+        <div class="overlay"><span>点击打开完整桌面 →</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 尺寸标注 -->
+  <div class="dimension-row">
+    <div class="dimension-label" style="width:240px">← 240px →</div>
+    <div class="dimension-label" style="flex:1">← 自适应 →</div>
+    <div class="dimension-label" style="width:320px">← 320px →</div>
+  </div>
+</div>
+
+<h3>布局说明</h3>
+<table>
+  <thead><tr><th>区域</th><th>宽度</th><th>内容</th><th>行为</th></tr></thead>
+  <tbody>
+    <tr><td><strong>左侧边栏</strong></td><td>固定 240px</td><td>Agent 列表（可折叠展开 Session 列表）+ 新建按钮</td><td>始终可见</td></tr>
+    <tr><td><strong>中间主区域</strong></td><td>自适应</td><td>当前 Session 的对话面板</td><td>自适应剩余宽度</td></tr>
+    <tr><td><strong>右侧边栏</strong></td><td>320px</td><td>Workspace 文件树 + 桌面预览</td><td>可收起（点击 📁 按钮切换）</td></tr>
+  </tbody>
+</table>
+
+<h3>数据流向</h3>
+<div class="mockup-container" style="padding:24px">
+  <div style="display:flex; align-items:center; justify-content:center; gap:16px; flex-wrap:wrap; font-size:13px;">
+    <div style="background:var(--user-bubble); padding:10px 16px; border-radius:var(--radius-card); text-align:center;">
+      <div style="font-weight:600; color:var(--text-primary);">agentStore</div>
+      <div style="font-size:11px; color:var(--text-secondary); margin-top:4px;">agents[]<br>sessions{}<br>selectedAgentId<br>selectedSessionId</div>
+    </div>
+    <div style="color:var(--accent);">→</div>
+    <div style="background:var(--user-bubble); padding:10px 16px; border-radius:var(--radius-card); text-align:center;">
+      <div style="font-weight:600; color:var(--text-primary);">chatStore</div>
+      <div style="font-size:11px; color:var(--text-secondary); margin-top:4px;">sessionStates{}<br>messages[]<br>isStreaming<br>abortController</div>
+    </div>
+    <div style="color:var(--accent);">→</div>
+    <div style="background:var(--user-bubble); padding:10px 16px; border-radius:var(--radius-card); text-align:center;">
+      <div style="font-weight:600; color:var(--text-primary);">UI Components</div>
+      <div style="font-size:11px; color:var(--text-secondary); margin-top:4px;">Sidebar<br>ChatPanel<br>WorkspacePanel</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

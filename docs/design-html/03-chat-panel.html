@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SeaTurt 设计稿 — 03 对话面板</title>
+<style>
+  :root {
+    --bg-main: #1e1e2e; --bg-sidebar: #181825; --bg-deepest: #11111b;
+    --text-primary: #cdd6f4; --text-secondary: #6c7086;
+    --accent: #89b4fa; --border: #313244;
+    --user-bubble: #313244; --success: #a6e3a1; --error: #f38ba8;
+    --warning: #f9e2af; --orange: #fab387;
+    --radius-bubble: 12px; --radius-card: 8px; --radius-btn: 6px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Inter", -apple-system, sans-serif; font-size: 14px; line-height: 1.6;
+    background: #0e0e16; color: var(--text-primary); padding: 40px 32px; max-width: 1400px; margin: 0 auto;
+  }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  h2 { font-size: 22px; font-weight: 600; margin: 48px 0 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 17px; font-weight: 600; margin: 32px 0 12px; color: var(--accent); }
+  p { margin: 8px 0; color: var(--text-secondary); }
+  code { font-family: "JetBrains Mono", monospace; font-size: 13px; background: var(--bg-deepest); padding: 2px 6px; border-radius: 4px; color: var(--orange); }
+  .nav-bar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 32px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .nav-bar a { padding: 6px 14px; border-radius: var(--radius-btn); background: var(--user-bubble); color: var(--text-primary); font-size: 13px; text-decoration: none; }
+  .nav-bar a:hover { background: var(--accent); color: var(--bg-deepest); }
+  .nav-bar a.active { background: var(--accent); color: var(--bg-deepest); }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-size: 13px; }
+  th { background: var(--bg-deepest); color: var(--text-primary); font-weight: 600; }
+  td { color: var(--text-secondary); }
+  .note-box { background: rgba(137,180,250,0.06); border-left: 3px solid var(--accent); padding: 12px 16px; border-radius: 0 var(--radius-card) var(--radius-card) 0; margin: 12px 0; font-size: 13px; }
+  .note-box strong { color: var(--text-primary); }
+  .mockup-container { background: var(--bg-deepest); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; margin: 20px 0; }
+
+  /* 对话面板 mockup */
+  .chat-mockup {
+    max-width: 720px; margin: 0 auto;
+    background: var(--bg-main); min-height: 680px;
+    display: flex; flex-direction: column;
+  }
+  .chat-topbar {
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+  }
+  .topbar-row1 { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+  .topbar-row1 .name { font-weight: 600; }
+  .topbar-row1 .model { color: var(--text-secondary); font-size: 12px; }
+  .topbar-row1 .status { padding: 2px 10px; border-radius: 10px; font-size: 11px; background: rgba(166,227,161,0.15); color: var(--success); }
+  .topbar-row1 .actions { margin-left: auto; display: flex; gap: 6px; }
+  .topbar-row1 .actions button { background: var(--user-bubble); border: none; color: var(--text-secondary); width: 30px; height: 30px; border-radius: var(--radius-btn); cursor: pointer; font-size: 15px; }
+  .topbar-row2 { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
+  .topbar-row2 .title { color: var(--text-primary); cursor: text; border-bottom: 1px dashed var(--border); }
+  .topbar-row2 .btn-new { color: var(--accent); cursor: pointer; background: transparent; border: none; font-size: 12px; }
+
+  .chat-messages {
+    flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+  }
+
+  /* 用户消息 */
+  .msg-user {
+    align-self: flex-end; max-width: 75%;
+    background: var(--user-bubble); color: var(--text-primary);
+    padding: 10px 16px; border-radius: var(--radius-bubble);
+    border-bottom-right-radius: 4px; font-size: 14px;
+  }
+  .msg-user .msg-images {
+    display: flex; gap: 8px; margin-top: 8px;
+  }
+  .msg-user .msg-images .thumb {
+    width: 80px; height: 80px; border-radius: 6px; background: var(--bg-deepest);
+    display: flex; align-items: center; justify-content: center; font-size: 24px; cursor: pointer;
+  }
+
+  /* 助手消息 */
+  .msg-assistant {
+    align-self: flex-start; max-width: 85%;
+    padding: 10px 16px; font-size: 14px;
+  }
+  .msg-assistant strong { color: var(--text-primary); }
+  .msg-assistant ul { margin: 6px 0 6px 20px; }
+  .msg-assistant li { color: var(--text-secondary); margin: 2px 0; }
+  .msg-assistant .code-block {
+    background: var(--bg-deepest); border-radius: var(--radius-card); padding: 12px 16px;
+    margin: 8px 0; font-family: "JetBrains Mono", monospace; font-size: 13px;
+    line-height: 1.5; color: var(--text-secondary); position: relative; overflow-x: auto;
+  }
+  .msg-assistant .code-block .lang-tag {
+    position: absolute; top: 6px; right: 8px;
+    font-size: 10px; color: var(--text-secondary); opacity: 0.6;
+  }
+  .msg-assistant .code-block .copy-btn {
+    position: absolute; top: 6px; right: 50px;
+    font-size: 10px; color: var(--accent); cursor: pointer;
+    background: transparent; border: none; opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .msg-assistant .code-block:hover .copy-btn { opacity: 1; }
+
+  /* Tool 调用卡片 */
+  .tool-card {
+    background: var(--bg-deepest); border-radius: var(--radius-card);
+    border-left: 3px solid var(--orange); overflow: hidden;
+  }
+  .tool-card.success { border-left-color: var(--success); }
+  .tool-card.error { border-left-color: var(--error); }
+  .tool-card.cancelled { border-left-color: var(--text-secondary); }
+  .tool-card .tool-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; font-size: 13px; font-weight: 600;
+  }
+  .tool-card .tool-header .tool-icon { font-size: 15px; }
+  .tool-card .tool-header .tool-name { font-family: "JetBrains Mono", monospace; }
+  .tool-card .tool-header .tool-status { margin-left: auto; font-size: 11px; font-weight: 400; }
+  .tool-card .tool-header .tool-status.running { color: var(--orange); }
+  .tool-card .tool-header .tool-status.ok { color: var(--success); }
+  .tool-card .tool-header .tool-status.err { color: var(--error); }
+  .tool-card .tool-header .tool-status.cancelled { color: var(--text-secondary); }
+  .tool-card .tool-header .cancel-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text-secondary);
+    padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tool-card .tool-header .cancel-btn:hover { border-color: var(--error); color: var(--error); }
+  .tool-card .tool-args {
+    padding: 0 14px 10px; font-family: "JetBrains Mono", monospace;
+    font-size: 12px; color: var(--text-secondary); line-height: 1.5;
+  }
+  .tool-card .tool-args .prefix { color: var(--accent); }
+  .tool-card .tool-result {
+    border-top: 1px solid var(--border); padding: 10px 14px;
+    font-size: 12px; color: var(--text-secondary);
+  }
+  .tool-card .tool-result .toggle {
+    cursor: pointer; color: var(--text-primary); font-size: 12px;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .tool-card .tool-result .result-content {
+    margin-top: 8px; background: rgba(0,0,0,0.2); padding: 10px 12px;
+    border-radius: 4px; font-family: "JetBrains Mono", monospace;
+    font-size: 12px; line-height: 1.5;
+  }
+
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid var(--border); border-top-color: var(--orange);
+    border-radius: 50%; animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* 输入栏 */
+  .input-bar {
+    padding: 14px 20px; border-top: 1px solid var(--border);
+    display: flex; align-items: flex-end; gap: 10px;
+  }
+  .attach-btn { background: transparent; border: none; color: var(--text-secondary); font-size: 20px; cursor: pointer; padding: 4px; }
+  .attach-btn:hover { color: var(--text-primary); }
+  .input-field {
+    flex: 1; background: var(--user-bubble); border: 1px solid var(--border);
+    border-radius: var(--radius-btn); padding: 10px 14px;
+    color: var(--text-primary); font-size: 13px; outline: none;
+    min-height: 40px; resize: none; font-family: inherit;
+  }
+  .input-field::placeholder { color: var(--text-secondary); }
+  .input-field:focus { border-color: var(--accent); }
+  .send-btn {
+    background: var(--accent); color: var(--bg-deepest); border: none;
+    padding: 10px 18px; border-radius: var(--radius-btn);
+    font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+  .send-btn:hover { opacity: 0.85; }
+  .stop-btn {
+    background: var(--error); color: #fff; border: none;
+    padding: 10px 18px; border-radius: var(--radius-btn);
+    font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+
+  /* 图片上传预览 */
+  .upload-preview {
+    padding: 8px 20px 0; display: flex; gap: 8px;
+  }
+  .upload-preview .preview-item {
+    width: 60px; height: 60px; border-radius: 6px;
+    background: var(--bg-deepest); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    position: relative; font-size: 20px;
+  }
+  .upload-preview .preview-item .remove {
+    position: absolute; top: -4px; right: -4px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--error); color: #fff; font-size: 10px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; border: none;
+  }
+
+  .side-by-side { display: flex; gap: 24px; flex-wrap: wrap; margin: 20px 0; }
+  .side-by-side > div { flex: 1; min-width: 320px; }
+
+  /* 弹窗 overlay */
+  .dialog-overlay {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10; border-radius: var(--radius-card);
+  }
+  .dialog-box {
+    background: var(--bg-main); border: 1px solid var(--border);
+    border-radius: 12px; padding: 28px 28px 20px; width: 360px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+  }
+  .dialog-box .dialog-title {
+    font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;
+  }
+  .dialog-box .dialog-desc {
+    font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 24px;
+  }
+  .dialog-box .dialog-actions {
+    display: flex; justify-content: flex-end; gap: 10px;
+  }
+  .dialog-box .dialog-actions .btn-cancel {
+    background: var(--user-bubble); border: 1px solid var(--border); color: var(--text-primary);
+    padding: 8px 18px; border-radius: var(--radius-btn); font-size: 13px; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .dialog-box .dialog-actions .btn-cancel:hover { background: var(--border); }
+  .dialog-box .dialog-actions .btn-danger {
+    background: var(--error); color: #fff; border: none;
+    padding: 8px 18px; border-radius: var(--radius-btn); font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: opacity 0.15s;
+  }
+  .dialog-box .dialog-actions .btn-danger:hover { opacity: 0.85; }
+</style>
+</head>
+<body>
+
+<nav class="nav-bar">
+  <a href="01-layout-overview.html">01 整体布局</a>
+  <a href="02-sidebar.html">02 侧边栏</a>
+  <a href="03-chat-panel.html" class="active">03 对话面板</a>
+  <a href="04-workspace.html">04 Workspace</a>
+  <a href="05-interactions.html">05 交互细节</a>
+  <a href="06-theme-responsive.html">06 主题 &amp; 响应式</a>
+  <a href="07-cron-job.html">07 定时任务</a>
+</nav>
+
+<h1>03 — 对话面板（主区域）</h1>
+<p>中间核心区域，展示当前 Session 的完整对话内容，包括消息气泡、Tool 调用卡片和输入栏。</p>
+
+<!-- ===== 完整对话 Mockup ===== -->
+<h2>完整对话 Mockup</h2>
+
+<div class="mockup-container">
+  <div class="chat-mockup">
+    <!-- 顶栏 -->
+    <div class="chat-topbar">
+      <div class="topbar-row1">
+        <span class="name">coder</span>
+        <span class="model">(gpt-4o)</span>
+        <span class="status">● Running</span>
+        <div class="actions">
+          <button title="定时任务">⏰</button>
+          <button title="设置">⚙</button>
+          <button title="Workspace">📁</button>
+        </div>
+      </div>
+      <div class="topbar-row2">
+        <span>📝</span>
+        <span class="title">代码审查</span>
+        <button style="margin-left:auto; background:transparent; border:none; color:var(--text-secondary); cursor:pointer; font-size:13px;" title="清空对话">🗑</button>
+        <button class="btn-new">+ 新对话</button>
+      </div>
+    </div>
+
+    <!-- 消息区 -->
+    <div class="chat-messages">
+      <!-- 用户消息 -->
+      <div class="msg-user">帮我把上周的会议纪要整理成周报</div>
+
+      <!-- 助手消息 -->
+      <div class="msg-assistant">
+        好的，我来读取会议纪要并整理成周报格式。
+      </div>
+
+      <!-- Tool 调用：成功 -->
+      <div class="tool-card success">
+        <div class="tool-header">
+          <span class="tool-icon">🔧</span>
+          <span class="tool-name">file_read</span>
+          <span class="tool-status ok">✓ 成功</span>
+        </div>
+        <div class="tool-args"><span class="prefix">📄</span> 会议纪要/0305.md</div>
+        <div class="tool-result">
+          <div class="toggle">▾ 执行结果</div>
+          <div class="result-content">
+            会议日期: 2025-03-05<br>
+            参与人: 张三、李四、王五<br>
+            议题: Q1 季度复盘...
+          </div>
+        </div>
+      </div>
+
+      <!-- 助手消息 with markdown -->
+      <div class="msg-assistant">
+        周报已整理完成，包含以下要点：
+        <ul>
+          <li><strong>项目进展</strong>：3 项</li>
+          <li><strong>待跟进事项</strong>：2 项</li>
+        </ul>
+        你可以在右侧文件树中点击查看 <code>周报/2025-W11.md</code>。
+      </div>
+
+      <!-- 用户消息 with image -->
+      <div class="msg-user">
+        帮我分析一下这张图表
+        <div class="msg-images">
+          <div class="thumb">📊</div>
+        </div>
+      </div>
+
+      <!-- Tool 调用：执行中 -->
+      <div class="tool-card">
+        <div class="tool-header">
+          <span class="tool-icon">🔧</span>
+          <span class="tool-name">shell_exec</span>
+          <div class="spinner"></div>
+          <span class="tool-status running">执行中</span>
+          <button class="cancel-btn">取消</button>
+        </div>
+        <div class="tool-args"><span class="prefix">$</span> python3 analyze.py --input chart.png</div>
+      </div>
+    </div>
+
+    <!-- 输入栏 -->
+    <div class="input-bar">
+      <button class="attach-btn">📎</button>
+      <input class="input-field" placeholder="在这里输入消息..." disabled />
+      <button class="stop-btn">⬛ 停止生成</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 顶栏详解 ===== -->
+<h2>顶栏组成</h2>
+
+<table>
+  <thead><tr><th>行</th><th>内容</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>第一行</td><td>Agent 名称 + 模型 + 运行状态 + [⏰] + [⚙] + [📁]</td><td>⏰ 打开定时任务面板，⚙ 打开设置，📁 切换 Workspace 面板</td></tr>
+    <tr><td>第二行</td><td>📝 Session 标题 + 🗑 清空对话 + [+ 新对话]</td><td>标题可 inline 编辑重命名；快捷新建 Session</td></tr>
+  </tbody>
+</table>
+
+<!-- ===== 消息气泡 ===== -->
+<h2>消息气泡</h2>
+
+<div class="side-by-side">
+  <div>
+    <h3>用户消息</h3>
+    <div class="mockup-container" style="padding: 20px; background: var(--bg-main);">
+      <div class="msg-user" style="margin-left:auto;">帮我写一个 TODO 应用</div>
+    </div>
+    <table style="margin-top:12px">
+      <tbody>
+        <tr><td>对齐</td><td>右对齐</td></tr>
+        <tr><td>背景</td><td><code>#313244</code>（深灰）</td></tr>
+        <tr><td>文字</td><td><code>#cdd6f4</code>（浅白）</td></tr>
+        <tr><td>圆角</td><td>12px（右下 4px）</td></tr>
+        <tr><td>最大宽度</td><td>75%</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div>
+    <h3>助手消息</h3>
+    <div class="mockup-container" style="padding: 20px; background: var(--bg-main);">
+      <div class="msg-assistant">
+        好的，我来帮你整理这些数据。<br><br>
+        分析结果如下：
+        <ul>
+          <li><strong>销售额</strong>：同比增长 12%</li>
+          <li><strong>Top 3 产品</strong>：A、B、C</li>
+        </ul>
+        详细报表已保存到 <code>整理/月度报告.xlsx</code>。
+      </div>
+    </div>
+    <table style="margin-top:12px">
+      <tbody>
+        <tr><td>对齐</td><td>左对齐</td></tr>
+        <tr><td>背景</td><td>透明（同主背景 <code>#1e1e2e</code>）</td></tr>
+        <tr><td>渲染</td><td>Markdown（加粗、列表、链接、表格）</td></tr>
+        <tr><td>代码块</td><td>语法高亮 + 复制按钮 + 语言标签</td></tr>
+        <tr><td>最大宽度</td><td>85%</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== Tool 调用卡片 ===== -->
+<h2>Tool 调用卡片</h2>
+
+<p>Tool 调用以独立卡片形式穿插在对话流中，左侧色条标识状态。</p>
+
+<div class="side-by-side">
+  <!-- 执行中 -->
+  <div>
+    <h3>执行中 <span style="color:var(--orange); font-size:13px;">⏳</span></h3>
+    <div class="mockup-container" style="padding:16px; background:var(--bg-main);">
+      <div class="tool-card">
+        <div class="tool-header">
+          <span class="tool-icon">🔧</span>
+          <span class="tool-name">shell_exec</span>
+          <div class="spinner"></div>
+          <span class="tool-status running">执行中</span>
+          <button class="cancel-btn">取消</button>
+        </div>
+        <div class="tool-args"><span class="prefix">$</span> python3 heavy_task.py --timeout 300</div>
+      </div>
+    </div>
+    <div class="note-box">
+      左侧色条 <code>#fab387</code>（橙色）<br>
+      右侧显示 spinner + <strong>[取消]</strong> 按钮<br>
+      点击取消 → <code>POST /api/agents/:id/sessions/:sid/chat/cancel-tool/:toolCallId</code>
+    </div>
+  </div>
+
+  <!-- 成功 -->
+  <div>
+    <h3>成功 <span style="color:var(--success); font-size:13px;">✓</span></h3>
+    <div class="mockup-container" style="padding:16px; background:var(--bg-main);">
+      <div class="tool-card success">
+        <div class="tool-header">
+          <span class="tool-icon">🔧</span>
+          <span class="tool-name">shell_exec</span>
+          <span class="tool-status ok">✓ 成功</span>
+        </div>
+        <div class="tool-args"><span class="prefix">$</span> python3 analyze.py --input data.csv --output 统计图表.png</div>
+        <div class="tool-result">
+          <div class="toggle">▾ 执行结果</div>
+          <div class="result-content">
+            数据分析完成：<br>
+            &nbsp;&nbsp;总记录数: 1,024<br>
+            &nbsp;&nbsp;已生成图表: 统计图表.png
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note-box">
+      左侧色条 <code>#a6e3a1</code>（绿色）<br>
+      结果默认折叠（▸），点击展开（▾）
+    </div>
+  </div>
+</div>
+
+<div class="side-by-side">
+  <!-- 失败 -->
+  <div>
+    <h3>失败 <span style="color:var(--error); font-size:13px;">✗</span></h3>
+    <div class="mockup-container" style="padding:16px; background:var(--bg-main);">
+      <div class="tool-card error">
+        <div class="tool-header">
+          <span class="tool-icon">🔧</span>
+          <span class="tool-name">shell_exec</span>
+          <span class="tool-status err">✗ 失败</span>
+        </div>
+        <div class="tool-args"><span class="prefix">$</span> pip install nonexistent-pkg</div>
+        <div class="tool-result">
+          <div class="result-content" style="color:var(--error);">
+            ERROR: No matching distribution found for nonexistent-pkg
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note-box">
+      左侧色条 <code>#f38ba8</code>（红色）<br>
+      自动展开显示错误信息
+    </div>
+  </div>
+
+  <!-- 已取消 -->
+  <div>
+    <h3>已取消 <span style="color:var(--text-secondary); font-size:13px;">⊘</span></h3>
+    <div class="mockup-container" style="padding:16px; background:var(--bg-main);">
+      <div class="tool-card cancelled">
+        <div class="tool-header">
+          <span class="tool-icon">🔧</span>
+          <span class="tool-name">shell_exec</span>
+          <span class="tool-status cancelled">⊘ 已取消</span>
+        </div>
+        <div class="tool-args"><span class="prefix">$</span> python3 heavy_task.py --timeout 300</div>
+        <div class="tool-result">
+          <div class="result-content" style="color:var(--text-secondary);">
+            ⊘ 用户取消了此工具调用
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note-box">
+      左侧色条 <code>#6c7086</code>（灰色）<br>
+      LLM 会收到 tool result "用户取消了此工具调用"，自行决定后续动作
+    </div>
+  </div>
+</div>
+
+<!-- ===== 状态流转 ===== -->
+<h3>状态流转</h3>
+<div class="mockup-container" style="padding:24px;">
+  <div style="display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap; font-size:13px;">
+    <div style="background:rgba(250,179,135,0.15); padding:8px 14px; border-radius:var(--radius-card); color:var(--orange); border:1px solid rgba(250,179,135,0.3);">
+      ⏳ 执行中<br><span style="font-size:11px; opacity:0.7;">spinner + [取消]</span>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="color:var(--success);">→</span>
+        <div style="background:rgba(166,227,161,0.15); padding:6px 12px; border-radius:var(--radius-card); color:var(--success); border:1px solid rgba(166,227,161,0.3);">✓ 成功（可折叠结果）</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="color:var(--error);">→</span>
+        <div style="background:rgba(243,139,168,0.15); padding:6px 12px; border-radius:var(--radius-card); color:var(--error); border:1px solid rgba(243,139,168,0.3);">✗ 失败（展开错误）</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="color:var(--text-secondary);">→</span>
+        <div style="background:rgba(108,112,134,0.15); padding:6px 12px; border-radius:var(--radius-card); color:var(--text-secondary); border:1px solid rgba(108,112,134,0.3);">⊘ 已取消</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 两粒度取消 ===== -->
+<h2>两粒度取消机制（v0.1.2）</h2>
+
+<table>
+  <thead><tr><th>类型</th><th>触发位置</th><th>API</th><th>效果</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>停止生成</strong></td>
+      <td>输入栏区域的"⬛ 停止生成"按钮</td>
+      <td><code>POST .../chat/cancel</code></td>
+      <td>取消整轮对话（Cancel Chat），终止 RunLoop 和所有 tool 执行</td>
+    </tr>
+    <tr>
+      <td><strong>Tool 卡片取消</strong></td>
+      <td>执行中的 Tool 卡片右上角 [取消] 按钮</td>
+      <td><code>POST .../chat/cancel-tool/:id</code></td>
+      <td>只取消单个 MCP 工具调用，Agent 继续推理</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ===== 清空对话确认弹窗 ===== -->
+<h2>清空对话确认弹窗</h2>
+
+<p>点击顶栏第二行的 🗑 按钮触发，弹出 AlertDialog 确认窗口，防止误操作。</p>
+
+<div class="side-by-side">
+  <div>
+    <h3>触发入口</h3>
+    <div class="mockup-container" style="background:var(--bg-main);">
+      <div style="display:flex; align-items:center; gap:8px; padding:10px 20px; background:rgba(108,112,134,0.08); font-size:12px; color:var(--text-secondary);">
+        <span>📝</span>
+        <span style="color:var(--text-primary);">代码审查</span>
+        <div style="margin-left:auto; display:flex; gap:6px; align-items:center;">
+          <button style="background:rgba(243,139,168,0.15); border:1px solid rgba(243,139,168,0.3); color:var(--error); width:28px; height:28px; border-radius:var(--radius-btn); cursor:pointer; font-size:13px; display:flex; align-items:center; justify-content:center;">🗑</button>
+          <button style="background:transparent; border:none; color:var(--accent); font-size:12px; cursor:pointer;">+ 新对话</button>
+        </div>
+      </div>
+    </div>
+    <div class="note-box">
+      顶栏第二行右侧 🗑 图标按钮<br>
+      Tooltip：<strong>清空对话</strong>
+    </div>
+  </div>
+
+  <div>
+    <h3>确认弹窗 Mockup</h3>
+    <div class="mockup-container" style="position:relative; min-height:280px; background:var(--bg-main);">
+      <!-- 模拟背景对话区 -->
+      <div style="padding:20px; opacity:0.3;">
+        <div class="msg-user" style="margin-left:auto; max-width:60%;">帮我整理一下周报</div>
+        <div class="msg-assistant" style="margin-top:12px;">好的，我来帮你整理...</div>
+      </div>
+      <!-- 遮罩 + 弹窗 -->
+      <div class="dialog-overlay">
+        <div class="dialog-box">
+          <div class="dialog-title">确认清空</div>
+          <div class="dialog-desc">确定要清空当前对话的所有消息吗？此操作不可撤销。</div>
+          <div class="dialog-actions">
+            <button class="btn-cancel">取消</button>
+            <button class="btn-danger">清空</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<table>
+  <thead><tr><th>元素</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>遮罩层</td><td>半透明黑色背景 <code>rgba(0,0,0,0.55)</code>，点击遮罩关闭弹窗</td></tr>
+    <tr><td>标题</td><td><strong>确认清空</strong>，16px 加粗</td></tr>
+    <tr><td>描述文字</td><td>"确定要清空当前对话的所有消息吗？此操作不可撤销。"</td></tr>
+    <tr><td>[取消] 按钮</td><td>灰色 ghost 样式，关闭弹窗不做操作</td></tr>
+    <tr><td>[清空] 按钮</td><td><code>bg-destructive</code>（<code>#f38ba8</code> 红色），确认后调用 <code>DELETE /api/agents/:id/sessions/:sid/history</code> 清空消息</td></tr>
+    <tr><td>关闭方式</td><td>点击 [取消] / 点击遮罩 / 按 Esc 键</td></tr>
+  </tbody>
+</table>
+
+<h3>交互流程</h3>
+<div class="mockup-container" style="padding:24px;">
+  <div style="display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap; font-size:13px;">
+    <div style="background:var(--user-bubble); padding:8px 14px; border-radius:var(--radius-card); color:var(--text-primary); border:1px solid var(--border);">
+      点击 🗑 按钮
+    </div>
+    <span style="color:var(--accent);">→</span>
+    <div style="background:rgba(137,180,250,0.1); padding:8px 14px; border-radius:var(--radius-card); color:var(--accent); border:1px solid rgba(137,180,250,0.3);">
+      弹出确认弹窗
+    </div>
+    <span style="color:var(--accent);">→</span>
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="background:rgba(243,139,168,0.15); padding:6px 12px; border-radius:var(--radius-card); color:var(--error); border:1px solid rgba(243,139,168,0.3);">点击 [清空] → 清除所有消息，弹窗关闭</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="background:rgba(108,112,134,0.15); padding:6px 12px; border-radius:var(--radius-card); color:var(--text-secondary); border:1px solid rgba(108,112,134,0.3);">点击 [取消] / 遮罩 / Esc → 不做操作，弹窗关闭</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 输入栏 ===== -->
+<h2>输入栏</h2>
+
+<div class="side-by-side">
+  <div>
+    <h3>正常状态</h3>
+    <div class="mockup-container" style="background:var(--bg-main);">
+      <div class="input-bar">
+        <button class="attach-btn">📎</button>
+        <input class="input-field" placeholder="在这里输入消息..." />
+        <button class="send-btn">发送</button>
+      </div>
+    </div>
+  </div>
+  <div>
+    <h3>流式输出中</h3>
+    <div class="mockup-container" style="background:var(--bg-main);">
+      <div class="input-bar">
+        <button class="attach-btn" style="opacity:0.3">📎</button>
+        <input class="input-field" placeholder="AI 正在回复中..." disabled style="opacity:0.5" />
+        <button class="stop-btn">⬛ 停止生成</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div>
+  <h3>带图片上传预览</h3>
+  <div class="mockup-container" style="background:var(--bg-main);">
+    <div class="upload-preview">
+      <div class="preview-item">🖼<button class="remove">×</button></div>
+      <div class="preview-item">📊<button class="remove">×</button></div>
+    </div>
+    <div class="input-bar">
+      <button class="attach-btn">📎</button>
+      <input class="input-field" placeholder="添加说明..." />
+      <button class="send-btn">发送</button>
+    </div>
+  </div>
+</div>
+
+<table style="margin-top:16px">
+  <thead><tr><th>功能</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>📎 图片上传</td><td>拖拽文件到输入区 / 粘贴 Ctrl+V / 点击按钮选择文件</td></tr>
+    <tr><td>多行输入</td><td>Enter 发送，Shift+Enter 换行</td></tr>
+    <tr><td>上传预览</td><td>选择图片后在输入栏上方显示缩略图，可单独删除</td></tr>
+    <tr><td>Agent 未运行</td><td>输入框禁用，placeholder 显示"请先启动 Agent"</td></tr>
+  </tbody>
+</table>
+
+</body>
+</html>

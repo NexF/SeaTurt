@@ -42,9 +42,18 @@ type Agent struct {
 	UpdatedAt     time.Time   `json:"updated_at"`
 }
 
+type Session struct {
+	ID        string    `json:"id"`
+	AgentID   string    `json:"agent_id"`
+	Title     string    `json:"title"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type Message struct {
 	ID               string      `json:"id"`
 	AgentID          string      `json:"agent_id"`
+	SessionID        string      `json:"session_id"`
 	Role             string      `json:"role"` // user | assistant | tool
 	Content          llm.Content `json:"content"`
 	ReasoningContent string      `json:"reasoning_content,omitempty"`

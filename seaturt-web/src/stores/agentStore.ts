@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import { Agent, AgentStatus, ModelItem } from "@/types"
+import { Agent, AgentStatus, ModelItem, Session } from "@/types"
 import * as api from "@/services/api"
 
 type AgentOperation = "starting" | "stopping" | "deleting"
@@ -11,8 +11,12 @@ interface AgentStore {
   selectedAgentId: string | null
   loading: boolean
   error: string | null
-  /** Tracks in-progress operations per agent */
   operatingAgents: Record<string, AgentOperation>
+
+  // Session state
+  sessions: Record<string, Session[]>  // agentId -> sessions
+  selectedSessionId: string | null
+  expandedAgentIds: Set<string>
 
   fetchAgents: () => Promise<void>
   fetchModels: () => Promise<void>
@@ -23,12 +27,19 @@ interface AgentStore {
   deleteAgent: (id: string) => Promise<void>
   refreshAgent: (id: string) => Promise<void>
   getOperation: (id: string) => AgentOperation | undefined
+
+  // Session methods
+  fetchSessions: (agentId: string) => Promise<void>
+  createSession: (agentId: string) => Promise<Session>
+  deleteSession: (agentId: string, sessionId: string) => Promise<void>
+  renameSession: (agentId: string, sessionId: string, title: string) => Promise<void>
+  selectSession: (agentId: string, sessionId: string) => void
+  toggleAgent: (agentId: string) => void
 }
 
 const POLL_INTERVAL = 1500
 const POLL_TIMEOUT = 30_000
 
-/** Poll agent status until it reaches the target or times out. */
 async function pollUntilStatus(
   agentId: string,
   targetStatus: AgentStatus,
@@ -43,7 +54,6 @@ async function pollUntilStatus(
       const agent = getAgent()
       if (agent?.status === targetStatus) return true
     } catch {
-      // agent might have been deleted; bail out
       return false
     }
   }
@@ -58,6 +68,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   loading: false,
   error: null,
   operatingAgents: {},
+  sessions: {},
+  selectedSessionId: null,
+  expandedAgentIds: new Set<string>(),
 
   fetchAgents: async () => {
     try {
@@ -92,7 +105,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     try {
       await api.startAgent(id)
       await get().refreshAgent(id)
-      // If not yet running, poll
       const current = get().agents.find((a) => a.id === id)
       if (current?.status !== "running") {
         await pollUntilStatus(
@@ -115,7 +127,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     try {
       await api.stopAgent(id)
       await get().refreshAgent(id)
-      // If not yet stopped, poll
       const current = get().agents.find((a) => a.id === id)
       if (current?.status !== "stopped") {
         await pollUntilStatus(
@@ -137,10 +148,18 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set((s) => ({ operatingAgents: { ...s.operatingAgents, [id]: "deleting" } }))
     try {
       await api.deleteAgent(id)
-      set((s) => ({
-        agents: s.agents.filter((a) => a.id !== id),
-        selectedAgentId: s.selectedAgentId === id ? null : s.selectedAgentId,
-      }))
+      set((s) => {
+        const { [id]: _, ...restSessions } = s.sessions
+        const newExpanded = new Set(s.expandedAgentIds)
+        newExpanded.delete(id)
+        return {
+          agents: s.agents.filter((a) => a.id !== id),
+          selectedAgentId: s.selectedAgentId === id ? null : s.selectedAgentId,
+          selectedSessionId: s.selectedAgentId === id ? null : s.selectedSessionId,
+          sessions: restSessions,
+          expandedAgentIds: newExpanded,
+        }
+      })
     } catch (err) {
       console.error("Failed to delete agent:", err)
     } finally {
@@ -159,4 +178,87 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   getOperation: (id) => get().operatingAgents[id],
+
+  // --- Session methods ---
+
+  fetchSessions: async (agentId) => {
+    try {
+      const res = await api.listSessions(agentId)
+      set((s) => ({
+        sessions: { ...s.sessions, [agentId]: res.sessions },
+      }))
+    } catch (err) {
+      console.warn("Failed to fetch sessions:", err)
+    }
+  },
+
+  createSession: async (agentId) => {
+    const session = await api.createSession(agentId)
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        [agentId]: [session, ...(s.sessions[agentId] || [])],
+      },
+      selectedAgentId: agentId,
+      selectedSessionId: session.id,
+    }))
+    return session
+  },
+
+  deleteSession: async (agentId, sessionId) => {
+    await api.deleteSession(agentId, sessionId)
+    set((s) => {
+      const agentSessions = (s.sessions[agentId] || []).filter((sess) => sess.id !== sessionId)
+      const newSelectedSessionId =
+        s.selectedSessionId === sessionId
+          ? agentSessions[0]?.id || null
+          : s.selectedSessionId
+      return {
+        sessions: { ...s.sessions, [agentId]: agentSessions },
+        selectedSessionId: newSelectedSessionId,
+      }
+    })
+  },
+
+  renameSession: async (agentId, sessionId, title) => {
+    await api.updateSession(agentId, sessionId, title)
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        [agentId]: (s.sessions[agentId] || []).map((sess) =>
+          sess.id === sessionId ? { ...sess, title } : sess
+        ),
+      },
+    }))
+  },
+
+  selectSession: (agentId, sessionId) => {
+    set({ selectedAgentId: agentId, selectedSessionId: sessionId })
+  },
+
+  toggleAgent: (agentId) => {
+    const { expandedAgentIds, selectedAgentId, sessions } = get()
+    const newExpanded = new Set(expandedAgentIds)
+
+    if (newExpanded.has(agentId)) {
+      // Collapse
+      newExpanded.delete(agentId)
+      set({ expandedAgentIds: newExpanded })
+    } else {
+      // Expand
+      newExpanded.add(agentId)
+      set({ expandedAgentIds: newExpanded, selectedAgentId: agentId })
+
+      // Fetch sessions and auto-select
+      get().fetchSessions(agentId).then(() => {
+        const agentSessions = get().sessions[agentId] || []
+        if (agentSessions.length > 0) {
+          get().selectSession(agentId, agentSessions[0].id)
+        } else {
+          // No sessions — auto-create one
+          get().createSession(agentId)
+        }
+      })
+    }
+  },
 }))

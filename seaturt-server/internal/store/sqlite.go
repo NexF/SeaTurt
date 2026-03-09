@@ -80,6 +80,21 @@ func (s *Store) migrate() error {
 	// Add reasoning_content column for reasoning model support (v0.1.6)
 	_, _ = s.db.Exec(`ALTER TABLE messages ADD COLUMN reasoning_content TEXT NOT NULL DEFAULT ''`)
 
+	// Add session_id column for multi-session support (v0.2.0)
+	_, _ = s.db.Exec(`ALTER TABLE messages ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id, created_at)`)
+
+	// Create sessions table (v0.2.0)
+	_, _ = s.db.Exec(`CREATE TABLE IF NOT EXISTS sessions (
+		id         TEXT PRIMARY KEY,
+		agent_id   TEXT NOT NULL,
+		title      TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+	)`)
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id, updated_at)`)
+
 	return nil
 }
 
@@ -165,16 +180,16 @@ func (s *Store) CreateMessage(m *agent.Message) error {
 	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO messages (id, agent_id, role, content, reasoning_content, tool_calls, tool_call_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ID, m.AgentID, m.Role, string(contentJSON), m.ReasoningContent, m.ToolCalls, m.ToolCallID, m.CreatedAt,
+		`INSERT INTO messages (id, agent_id, session_id, role, content, reasoning_content, tool_calls, tool_call_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.AgentID, m.SessionID, m.Role, string(contentJSON), m.ReasoningContent, m.ToolCalls, m.ToolCallID, m.CreatedAt,
 	)
 	return err
 }
 
 func (s *Store) ListMessages(agentID string) ([]*agent.Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, agent_id, role, content, reasoning_content, tool_calls, tool_call_id, created_at
+		`SELECT id, agent_id, session_id, role, content, reasoning_content, tool_calls, tool_call_id, created_at
 		 FROM messages WHERE agent_id = ? ORDER BY created_at ASC`, agentID,
 	)
 	if err != nil {
@@ -186,7 +201,7 @@ func (s *Store) ListMessages(agentID string) ([]*agent.Message, error) {
 	for rows.Next() {
 		m := &agent.Message{}
 		var contentJSON string
-		if err := rows.Scan(&m.ID, &m.AgentID, &m.Role, &contentJSON, &m.ReasoningContent, &m.ToolCalls, &m.ToolCallID, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.AgentID, &m.SessionID, &m.Role, &contentJSON, &m.ReasoningContent, &m.ToolCalls, &m.ToolCallID, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		// Deserialize Content from JSON
@@ -201,8 +216,100 @@ func (s *Store) ListMessages(agentID string) ([]*agent.Message, error) {
 	return messages, rows.Err()
 }
 
+func (s *Store) ListMessagesBySession(sessionID string) ([]*agent.Message, error) {
+	rows, err := s.db.Query(
+		`SELECT id, agent_id, session_id, role, content, reasoning_content, tool_calls, tool_call_id, created_at
+		 FROM messages WHERE session_id = ? ORDER BY created_at ASC`, sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []*agent.Message
+	for rows.Next() {
+		m := &agent.Message{}
+		var contentJSON string
+		if err := rows.Scan(&m.ID, &m.AgentID, &m.SessionID, &m.Role, &contentJSON, &m.ReasoningContent, &m.ToolCalls, &m.ToolCallID, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(contentJSON), &m.Content); err != nil {
+			m.Content = llm.Content{llm.NewTextContent(contentJSON)}
+		}
+		s.internalizeImages(m.Content)
+		messages = append(messages, m)
+	}
+	return messages, rows.Err()
+}
+
 func (s *Store) DeleteMessages(agentID string) error {
 	_, err := s.db.Exec(`DELETE FROM messages WHERE agent_id = ?`, agentID)
+	return err
+}
+
+func (s *Store) DeleteMessagesBySession(sessionID string) error {
+	_, err := s.db.Exec(`DELETE FROM messages WHERE session_id = ?`, sessionID)
+	return err
+}
+
+// --- Session CRUD ---
+
+func (s *Store) CreateSession(sess *agent.Session) error {
+	_, err := s.db.Exec(
+		`INSERT INTO sessions (id, agent_id, title, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		sess.ID, sess.AgentID, sess.Title, sess.CreatedAt, sess.UpdatedAt,
+	)
+	return err
+}
+
+func (s *Store) GetSession(id string) (*agent.Session, error) {
+	row := s.db.QueryRow(
+		`SELECT id, agent_id, title, created_at, updated_at FROM sessions WHERE id = ?`, id,
+	)
+	sess := &agent.Session{}
+	err := row.Scan(&sess.ID, &sess.AgentID, &sess.Title, &sess.CreatedAt, &sess.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
+func (s *Store) ListSessions(agentID string) ([]*agent.Session, error) {
+	rows, err := s.db.Query(
+		`SELECT id, agent_id, title, created_at, updated_at
+		 FROM sessions WHERE agent_id = ? ORDER BY updated_at DESC`, agentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []*agent.Session
+	for rows.Next() {
+		sess := &agent.Session{}
+		if err := rows.Scan(&sess.ID, &sess.AgentID, &sess.Title, &sess.CreatedAt, &sess.UpdatedAt); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions, rows.Err()
+}
+
+func (s *Store) UpdateSession(sess *agent.Session) error {
+	_, err := s.db.Exec(
+		`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`,
+		sess.Title, sess.UpdatedAt, sess.ID,
+	)
+	return err
+}
+
+func (s *Store) DeleteSession(id string) error {
+	// Delete associated messages first
+	if _, err := s.db.Exec(`DELETE FROM messages WHERE session_id = ?`, id); err != nil {
+		return fmt.Errorf("delete session messages: %w", err)
+	}
+	_, err := s.db.Exec(`DELETE FROM sessions WHERE id = ?`, id)
 	return err
 }
 

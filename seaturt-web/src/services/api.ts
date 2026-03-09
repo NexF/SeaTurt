@@ -1,4 +1,4 @@
-import { Agent, ModelsResponse, Message, FileEntry, DesktopInfo, ContentBlock } from "@/types"
+import { Agent, ModelsResponse, Message, Session, FileEntry, DesktopInfo, ContentBlock } from "@/types"
 
 const BASE = "/api"
 
@@ -49,23 +49,46 @@ export async function deleteAgent(id: string): Promise<void> {
   await request(`/agents/${id}`, { method: "DELETE" })
 }
 
-// Chat
-export async function getHistory(agentId: string): Promise<Message[]> {
-  return request<Message[]>(`/agents/${agentId}/history`)
+// Sessions
+export async function listSessions(agentId: string): Promise<{ sessions: Session[] }> {
+  return request<{ sessions: Session[] }>(`/agents/${agentId}/sessions`)
 }
 
-export async function deleteHistory(agentId: string): Promise<void> {
-  await request(`/agents/${agentId}/history`, { method: "DELETE" })
+export async function createSession(agentId: string, title?: string): Promise<Session> {
+  return request<Session>(`/agents/${agentId}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  })
 }
 
-// Cancel the entire active chat session
-export async function cancelChat(agentId: string): Promise<void> {
-  await request(`/agents/${agentId}/chat/cancel`, { method: "POST" })
+export async function updateSession(agentId: string, sessionId: string, title: string): Promise<Session> {
+  return request<Session>(`/agents/${agentId}/sessions/${sessionId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  })
 }
 
-// Cancel a specific tool call (agent continues reasoning)
-export async function cancelToolCall(agentId: string, toolCallId: string): Promise<void> {
-  await request(`/agents/${agentId}/chat/cancel-tool/${toolCallId}`, { method: "POST" })
+export async function deleteSession(agentId: string, sessionId: string): Promise<void> {
+  await fetch(`${BASE}/agents/${agentId}/sessions/${sessionId}`, { method: "DELETE" })
+}
+
+// Chat (session-level)
+export async function getHistory(agentId: string, sessionId: string): Promise<Message[]> {
+  return request<Message[]>(`/agents/${agentId}/sessions/${sessionId}/history`)
+}
+
+export async function deleteHistory(agentId: string, sessionId: string): Promise<void> {
+  await request(`/agents/${agentId}/sessions/${sessionId}/history`, { method: "DELETE" })
+}
+
+export async function cancelChat(agentId: string, sessionId: string): Promise<void> {
+  await request(`/agents/${agentId}/sessions/${sessionId}/chat/cancel`, { method: "POST" })
+}
+
+export async function cancelToolCall(agentId: string, sessionId: string, toolCallId: string): Promise<void> {
+  await request(`/agents/${agentId}/sessions/${sessionId}/chat/cancel-tool/${toolCallId}`, { method: "POST" })
 }
 
 export interface ChatPayload {
@@ -75,6 +98,7 @@ export interface ChatPayload {
 
 export function streamChat(
   agentId: string,
+  sessionId: string,
   payload: ChatPayload,
   onEvent: (event: { type: string; data: unknown }) => void,
   onDone: () => void,
@@ -87,19 +111,17 @@ export function streamChat(
     let headers: Record<string, string> = {}
 
     if (payload.images && payload.images.length > 0) {
-      // multipart
       const formData = new FormData()
       formData.append("text", payload.text)
       payload.images.forEach((img) => formData.append("image", img))
       body = formData
     } else {
-      // JSON
       const content: ContentBlock[] = [{ type: "text", text: payload.text }]
       headers["Content-Type"] = "application/json"
       body = JSON.stringify({ content })
     }
 
-    const res = await fetch(`${BASE}/agents/${agentId}/chat`, {
+    const res = await fetch(`${BASE}/agents/${agentId}/sessions/${sessionId}/chat`, {
       method: "POST",
       headers,
       body,

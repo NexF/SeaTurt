@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SeaTurt v0.3.0 — 定时任务 Tab 设计稿</title>
+<style>
+  /* ========== Design Tokens (from project index.css) ========== */
+  :root {
+    --background: hsl(220, 23%, 95%);
+    --foreground: hsl(234, 16%, 35%);
+    --card: hsl(0, 0%, 100%);
+    --popover: hsl(220, 23%, 95%);
+    --popover-foreground: hsl(234, 16%, 35%);
+    --primary: hsl(220, 91%, 54%);
+    --primary-foreground: hsl(0, 0%, 100%);
+    --secondary: hsl(223, 16%, 88%);
+    --secondary-foreground: hsl(234, 16%, 35%);
+    --muted: hsl(223, 16%, 88%);
+    --muted-foreground: hsl(233, 10%, 47%);
+    --accent: hsl(223, 16%, 88%);
+    --accent-foreground: hsl(234, 16%, 35%);
+    --destructive: hsl(347, 77%, 50%);
+    --destructive-foreground: hsl(0, 0%, 100%);
+    --border: hsl(223, 16%, 85%);
+    --input: hsl(223, 16%, 85%);
+    --ring: hsl(220, 91%, 54%);
+    --radius: 0.5rem;
+    --green: hsl(142, 71%, 45%);
+    --orange: hsl(25, 95%, 53%);
+  }
+  .dark {
+    --background: hsl(240, 21%, 15%);
+    --foreground: hsl(226, 64%, 88%);
+    --card: hsl(240, 21%, 18%);
+    --popover: hsl(240, 23%, 9%);
+    --popover-foreground: hsl(226, 64%, 88%);
+    --primary: hsl(217, 92%, 76%);
+    --primary-foreground: hsl(240, 23%, 9%);
+    --secondary: hsl(240, 17%, 20%);
+    --secondary-foreground: hsl(226, 64%, 88%);
+    --muted: hsl(240, 17%, 20%);
+    --muted-foreground: hsl(231, 11%, 47%);
+    --accent: hsl(240, 17%, 20%);
+    --accent-foreground: hsl(226, 64%, 88%);
+    --destructive: hsl(351, 74%, 73%);
+    --destructive-foreground: hsl(240, 23%, 9%);
+    --border: hsl(240, 17%, 24%);
+    --input: hsl(240, 17%, 24%);
+    --ring: hsl(217, 92%, 76%);
+    --green: hsl(142, 71%, 55%);
+    --orange: hsl(25, 95%, 63%);
+  }
+
+  /* ========== Base ========== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    background: var(--background);
+    color: var(--foreground);
+    padding: 32px;
+  }
+
+  /* ========== Page Layout ========== */
+  .design-header {
+    max-width: 900px;
+    margin: 0 auto 32px;
+  }
+  .design-header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .design-header p {
+    font-size: 13px;
+    color: var(--muted-foreground);
+  }
+  .design-header .theme-toggle {
+    float: right;
+    padding: 6px 12px;
+    font-size: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--foreground);
+    cursor: pointer;
+  }
+
+  .section-label {
+    max-width: 900px;
+    margin: 40px auto 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-desc {
+    max-width: 900px;
+    margin: 0 auto 16px;
+    font-size: 12px;
+    color: var(--muted-foreground);
+  }
+
+  /* ========== Dialog Container ========== */
+  .dialog-overlay {
+    max-width: 900px;
+    margin: 0 auto 24px;
+    background: rgba(0,0,0,0.04);
+    border-radius: 12px;
+    padding: 32px;
+    display: flex;
+    justify-content: center;
+  }
+  .dark .dialog-overlay {
+    background: rgba(0,0,0,0.2);
+  }
+  .dialog {
+    width: 672px;
+    max-height: 560px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .dark .dialog {
+    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.4);
+  }
+  .dialog-header {
+    padding: 20px 24px 0;
+  }
+  .dialog-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+  }
+
+  /* ========== Tabs ========== */
+  .tabs-list {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    gap: 0;
+  }
+  .tab-trigger {
+    padding: 8px 16px;
+    font-size: 13px;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    border: none;
+    background: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+    font-family: inherit;
+  }
+  .tab-trigger:hover {
+    color: var(--foreground);
+  }
+  .tab-trigger.active {
+    color: var(--foreground);
+    font-weight: 500;
+    border-bottom-color: var(--primary);
+  }
+
+  /* ========== Tab Content ========== */
+  .tab-content {
+    padding: 20px 24px;
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  /* ========== CronJob List (Empty) ========== */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 0;
+    color: var(--muted-foreground);
+  }
+  .empty-icon {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 12px;
+    opacity: 0.4;
+  }
+  .empty-state p {
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+
+  /* ========== Buttons ========== */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    white-space: nowrap;
+    border: none;
+  }
+  .btn-sm { height: 28px; padding: 0 12px; font-size: 12px; }
+  .btn-xs { height: 24px; padding: 0 8px; font-size: 11px; }
+  .btn-primary {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+  .btn-primary:hover { opacity: 0.9; }
+  .btn-outline {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--foreground);
+  }
+  .btn-outline:hover { background: var(--accent); }
+  .btn-ghost {
+    background: transparent;
+    color: var(--muted-foreground);
+  }
+  .btn-ghost:hover { background: var(--accent); color: var(--foreground); }
+  .btn-destructive {
+    background: transparent;
+    color: var(--destructive);
+  }
+  .btn-destructive:hover { background: hsl(347, 77%, 50%, 0.1); }
+  .dark .btn-destructive:hover { background: hsl(351, 74%, 73%, 0.1); }
+  .btn-icon {
+    width: 28px; height: 28px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 6px; background: transparent; border: none;
+    color: var(--muted-foreground); cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .btn-icon:hover { background: var(--accent); color: var(--foreground); }
+  .btn-icon.destructive:hover { background: hsl(347, 77%, 50%, 0.1); color: var(--destructive); }
+
+  /* ========== CronJob Card ========== */
+  .cron-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cron-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    transition: border-color 0.15s;
+  }
+  .cron-card:hover {
+    border-color: var(--ring);
+  }
+  .cron-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .cron-card-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+  }
+  .cron-expr-badge {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--accent);
+    color: var(--foreground);
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .cron-prompt-text {
+    font-size: 13px;
+    color: var(--foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+  .cron-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .cron-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 11px;
+    color: var(--muted-foreground);
+  }
+  .meta-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* ========== Switch ========== */
+  .switch {
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    background: var(--muted);
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+    border: none;
+    flex-shrink: 0;
+  }
+  .switch.on { background: var(--primary); }
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: white;
+    transition: transform 0.2s;
+  }
+  .switch.on::after { transform: translateX(16px); }
+
+  /* ========== Status Badge ========== */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+  }
+  .status-success { background: hsl(142, 71%, 45%, 0.12); color: var(--green); }
+  .status-failed { background: hsl(347, 77%, 50%, 0.1); color: var(--destructive); }
+  .status-skipped { background: hsl(25, 95%, 53%, 0.1); color: var(--orange); }
+
+  /* ========== Form ========== */
+  .form-group {
+    margin-bottom: 16px;
+  }
+  .form-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+  .form-input {
+    width: 100%;
+    height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--input);
+    border-radius: 6px;
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .form-input:focus { border-color: var(--ring); box-shadow: 0 0 0 1px var(--ring); }
+  .form-input.mono {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 13px;
+    letter-spacing: 1px;
+  }
+  .form-input.error { border-color: var(--destructive); }
+  .form-textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 8px 12px;
+    border: 1px solid var(--input);
+    border-radius: 6px;
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    resize: vertical;
+    line-height: 1.5;
+    transition: border-color 0.15s;
+  }
+  .form-textarea:focus { border-color: var(--ring); box-shadow: 0 0 0 1px var(--ring); }
+  .form-hint {
+    font-size: 11px;
+    color: var(--muted-foreground);
+    margin-top: 4px;
+  }
+  .form-error {
+    font-size: 11px;
+    color: var(--destructive);
+    margin-top: 4px;
+  }
+  .form-select {
+    width: 100%;
+    height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--input);
+    border-radius: 6px;
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+  }
+
+  /* ========== Preview Box ========== */
+  .preview-box {
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-top: 8px;
+  }
+  .preview-title {
+    font-size: 11px;
+    color: var(--muted-foreground);
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+  .preview-list {
+    list-style: none;
+    padding: 0;
+  }
+  .preview-list li {
+    font-size: 12px;
+    font-family: "JetBrains Mono", monospace;
+    color: var(--foreground);
+    padding: 2px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .preview-list li .dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--primary);
+    flex-shrink: 0;
+  }
+
+  /* ========== Presets ========== */
+  .presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .preset-chip {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .preset-chip:hover {
+    background: var(--accent);
+    color: var(--foreground);
+    border-color: var(--ring);
+  }
+  .preset-chip.selected {
+    background: var(--primary);
+    color: var(--primary-foreground);
+    border-color: var(--primary);
+  }
+
+  /* ========== Dialog Footer ========== */
+  .dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ========== Execution History ========== */
+  .history-panel {
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+    padding-top: 8px;
+  }
+  .history-row {
+    display: flex;
+    align-items: center;
+    padding: 6px 0;
+    font-size: 12px;
+    gap: 12px;
+  }
+  .history-row + .history-row {
+    border-top: 1px solid var(--border);
+  }
+  .history-time {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--muted-foreground);
+    white-space: nowrap;
+  }
+  .history-duration {
+    font-size: 11px;
+    color: var(--muted-foreground);
+    white-space: nowrap;
+  }
+  .history-session-link {
+    font-size: 11px;
+    color: var(--primary);
+    text-decoration: none;
+    cursor: pointer;
+    margin-left: auto;
+  }
+  .history-session-link:hover { text-decoration: underline; }
+
+  /* ========== Collapsible ========== */
+  .collapsible-trigger {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 4px 0;
+    font-family: inherit;
+  }
+  .collapsible-trigger:hover { color: var(--foreground); }
+  .collapsible-trigger svg {
+    transition: transform 0.2s;
+  }
+  .collapsible-trigger.open svg {
+    transform: rotate(90deg);
+  }
+
+  /* ========== SVG Icons (inline) ========== */
+  .icon { width: 14px; height: 14px; flex-shrink: 0; }
+  .icon-sm { width: 12px; height: 12px; }
+  .icon-lg { width: 16px; height: 16px; }
+
+  /* ========== Annotations ========== */
+  .annotation {
+    max-width: 900px;
+    margin: 8px auto 0;
+    padding: 10px 14px;
+    background: hsl(48, 96%, 89%);
+    border: 1px solid hsl(45, 93%, 47%);
+    border-radius: 6px;
+    font-size: 12px;
+    color: hsl(32, 72%, 25%);
+    line-height: 1.5;
+  }
+  .dark .annotation {
+    background: hsl(45, 50%, 15%);
+    border-color: hsl(45, 60%, 30%);
+    color: hsl(45, 80%, 75%);
+  }
+  .annotation strong { font-weight: 600; }
+
+  /* ========== Separator ========== */
+  .sep {
+    max-width: 900px;
+    margin: 48px auto;
+    border: none;
+    border-top: 2px dashed var(--border);
+  }
+
+  /* ========== Nav Bar (consistent with design-html series) ========== */
+  .nav-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; padding: 12px 0; border-bottom: 1px solid var(--border); max-width: 900px; margin-left: auto; margin-right: auto; }
+  .nav-bar a { padding: 5px 12px; border-radius: 6px; background: var(--secondary); color: var(--foreground); font-size: 12px; text-decoration: none; transition: background 0.15s; }
+  .nav-bar a:hover { background: var(--primary); color: var(--primary-foreground); }
+  .nav-bar a.active { background: var(--primary); color: var(--primary-foreground); }
+</style>
+</head>
+<body>
+
+<nav class="nav-bar">
+  <a href="01-layout-overview.html">01 整体布局</a>
+  <a href="02-sidebar.html">02 侧边栏</a>
+  <a href="03-chat-panel.html">03 对话面板</a>
+  <a href="04-workspace.html">04 Workspace</a>
+  <a href="05-interactions.html">05 交互细节</a>
+  <a href="06-theme-responsive.html">06 主题 &amp; 响应式</a>
+  <a href="07-cron-job.html" class="active">07 定时任务</a>
+</nav>
+
+<div class="design-header">
+  <button class="theme-toggle" onclick="document.body.classList.toggle('dark')">切换 亮色/暗色</button>
+  <h1>SeaTurt v0.3.0 — 定时任务面板设计稿</h1>
+  <p>对话面板顶栏新增 ⏰ 按钮，点击打开独立的定时任务管理面板（不与设置合并）</p>
+</div>
+
+<!-- ===================== STATE 1: Empty ===================== -->
+<div class="section-label">状态 1 — 空状态（无定时任务）</div>
+<div class="section-desc">Agent 尚未创建任何定时任务时的默认展示</div>
+
+<div class="dialog-overlay">
+  <div class="dialog">
+    <div class="dialog-header">
+      <div class="dialog-title">定时任务 — 新闻助手</div>
+    </div>
+    <div class="tab-content">
+      <div class="empty-state">
+        <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <p>暂无定时任务</p>
+        <button class="btn btn-sm btn-primary">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新建任务
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="annotation">
+  <strong>交互说明：</strong>定时任务作为独立面板，通过对话面板顶栏 Row 1 右侧的 ⏰ 按钮打开（与 ⚙ 设置、📁 Workspace 同级）。不再嵌入 AgentSettings Tab，AgentSettings 保持原有的单页结构不变。
+</div>
+
+<!-- ===================== STATE 2: With Jobs ===================== -->
+<div class="section-label">状态 2 — 任务列表（含多任务 + 启用/禁用）</div>
+<div class="section-desc">已创建多个定时任务，包含启用和禁用状态</div>
+
+<div class="dialog-overlay">
+  <div class="dialog">
+    <div class="dialog-header">
+      <div class="dialog-title">定时任务 — 新闻助手</div>
+    </div>
+    <div class="tab-content">
+      <!-- Header -->
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+        <span style="font-size: 12px; color: var(--muted-foreground);">共 3 个任务</span>
+        <button class="btn btn-sm btn-primary">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新建任务
+        </button>
+      </div>
+
+      <!-- Card 1 — Enabled -->
+      <div class="cron-list">
+        <div class="cron-card">
+          <div class="cron-card-header">
+            <div class="cron-card-left">
+              <span class="cron-expr-badge">0 9 * * *</span>
+              <span class="cron-prompt-text">抓取 HackerNews 前 10 条头条，用中文总结每条的核心内容</span>
+            </div>
+            <div class="cron-card-actions">
+              <button class="switch on" title="已启用"></button>
+              <button class="btn-icon" title="立即执行">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              </button>
+              <button class="btn-icon destructive" title="删除">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="cron-card-meta">
+            <span class="meta-item">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              每天 09:00
+            </span>
+            <span class="meta-item">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              固定 Session
+            </span>
+            <span class="meta-item">下次执行：2026-03-10 09:00</span>
+            <button class="collapsible-trigger" onclick="this.classList.toggle('open'); this.closest('.cron-card').querySelector('.history-panel').style.display = this.classList.contains('open') ? 'block' : 'none'">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+              执行历史
+            </button>
+          </div>
+          <!-- History (initially hidden) -->
+          <div class="history-panel" style="display: none;">
+            <div class="history-row">
+              <span class="history-time">2026-03-09 09:00:12</span>
+              <span class="status-badge status-success">成功</span>
+              <span class="history-duration">耗时 23s</span>
+              <a class="history-session-link">查看对话 →</a>
+            </div>
+            <div class="history-row">
+              <span class="history-time">2026-03-08 09:00:08</span>
+              <span class="status-badge status-success">成功</span>
+              <span class="history-duration">耗时 18s</span>
+              <a class="history-session-link">查看对话 →</a>
+            </div>
+            <div class="history-row">
+              <span class="history-time">2026-03-07 09:00:15</span>
+              <span class="status-badge status-failed">失败</span>
+              <span class="history-duration">耗时 5s</span>
+              <a class="history-session-link">查看对话 →</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2 — Enabled -->
+        <div class="cron-card">
+          <div class="cron-card-header">
+            <div class="cron-card-left">
+              <span class="cron-expr-badge">*/30 * * * *</span>
+              <span class="cron-prompt-text">检查服务器日志中的 ERROR，如果发现异常请详细说明</span>
+            </div>
+            <div class="cron-card-actions">
+              <button class="switch on" title="已启用"></button>
+              <button class="btn-icon" title="立即执行">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              </button>
+              <button class="btn-icon destructive" title="删除">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="cron-card-meta">
+            <span class="meta-item">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              每 30 分钟
+            </span>
+            <span class="meta-item">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              每次新建
+            </span>
+            <span class="meta-item">下次执行：2026-03-09 15:30</span>
+            <button class="collapsible-trigger">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+              执行历史
+            </button>
+          </div>
+        </div>
+
+        <!-- Card 3 — Disabled -->
+        <div class="cron-card" style="opacity: 0.55;">
+          <div class="cron-card-header">
+            <div class="cron-card-left">
+              <span class="cron-expr-badge">0 9 * * 1</span>
+              <span class="cron-prompt-text">生成上周的项目周报摘要</span>
+            </div>
+            <div class="cron-card-actions">
+              <button class="switch" title="已禁用"></button>
+              <button class="btn-icon" title="立即执行" style="opacity: 0.4; pointer-events: none;">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              </button>
+              <button class="btn-icon destructive" title="删除">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="cron-card-meta">
+            <span class="meta-item">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              每周一 09:00
+            </span>
+            <span class="meta-item">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              固定 Session
+            </span>
+            <span class="meta-item" style="color: var(--muted-foreground);">已禁用</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="annotation">
+  <strong>交互说明：</strong>
+  ① 卡片 hover 时边框高亮；
+  ② Switch 切换启用/禁用即时生效（调 PUT API）；
+  ③ 禁用的卡片整体降低透明度，手动触发按钮不可点击；
+  ④ "执行历史"可折叠展开，点击展开显示最近执行记录；
+  ⑤ 点击 prompt 文字或卡片空白处可进入编辑；
+  ⑥ "查看对话"链接跳转到对应 Session。
+</div>
+
+<!-- ===================== STATE 3: Create/Edit Form ===================== -->
+<div class="section-label">状态 3 — 创建/编辑定时任务（Dialog 表单）</div>
+<div class="section-desc">点击"新建任务"或编辑已有任务时弹出的表单</div>
+
+<div class="dialog-overlay">
+  <div class="dialog" style="max-height: 600px;">
+    <div class="dialog-header">
+      <div class="dialog-title">新建定时任务</div>
+    </div>
+    <div class="tab-content" style="padding-top: 16px;">
+      <!-- Task Type -->
+      <div class="form-group">
+        <label class="form-label">任务类型</label>
+        <div class="presets">
+          <button class="preset-chip selected">周期性（Cron）</button>
+          <button class="preset-chip">一次性（At）</button>
+        </div>
+      </div>
+
+      <!-- Cron Expression (shown when type=cron) -->
+      <div class="form-group">
+        <label class="form-label">Cron 表达式</label>
+        <input type="text" class="form-input mono" value="0 9 * * *" placeholder="分 时 日 月 周（如 0 9 * * *）">
+        <div class="presets">
+          <button class="preset-chip">每小时</button>
+          <button class="preset-chip selected">每天 9:00</button>
+          <button class="preset-chip">每天 18:00</button>
+          <button class="preset-chip">每周一 9:00</button>
+          <button class="preset-chip">每月 1 号</button>
+        </div>
+        <!-- Preview -->
+        <div class="preview-box">
+          <div class="preview-title">接下来 5 次执行时间</div>
+          <ul class="preview-list">
+            <li><span class="dot"></span>2026-03-10 (周二) 09:00</li>
+            <li><span class="dot"></span>2026-03-11 (周三) 09:00</li>
+            <li><span class="dot"></span>2026-03-12 (周四) 09:00</li>
+            <li><span class="dot"></span>2026-03-13 (周五) 09:00</li>
+            <li><span class="dot"></span>2026-03-14 (周六) 09:00</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Prompt -->
+      <div class="form-group">
+        <label class="form-label">执行 Prompt</label>
+        <textarea class="form-textarea" placeholder="定时任务触发时发送给 Agent 的消息...">抓取 HackerNews 前 10 条头条，用中文总结每条的核心内容</textarea>
+        <div class="form-hint">此 prompt 将在定时触发时自动发送给 Agent</div>
+      </div>
+
+      <!-- Session Strategy -->
+      <div class="form-group">
+        <label class="form-label">Session 策略</label>
+        <select class="form-select">
+          <option selected>固定 Session（复用同一会话）</option>
+          <option>每次新建 Session</option>
+        </select>
+        <div class="form-hint">固定：每次执行发到同一个对话（若对话被删除，将自动创建新对话继续执行）；新建：每次创建独立对话</div>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button class="btn btn-sm btn-outline">取消</button>
+      <button class="btn btn-sm btn-primary">创建</button>
+    </div>
+  </div>
+</div>
+<div class="annotation">
+  <strong>交互说明：</strong>
+  ① 顶部"任务类型"切换时，表单内容动态变化（Cron 表达式 ↔ 日期时间选择器）；
+  ② 预设快捷按钮点击后自动填充 cron 表达式，选中态高亮；
+  ③ 表达式变更时实时计算并刷新"接下来 5 次执行时间"预览；
+  ④ 表达式无效时输入框变红，预览区显示"无效的 cron 表达式"；
+  ⑤ 编辑模式下标题改为"编辑定时任务"，按钮改为"保存"。
+</div>
+
+<!-- ===================== STATE 3-at: At Type Form ===================== -->
+<div class="section-label">状态 3（At 类型） — 创建一次性定时任务</div>
+<div class="section-desc">选择"一次性（At）"类型时的表单变体</div>
+
+<div class="dialog-overlay">
+  <div class="dialog" style="max-height: 480px;">
+    <div class="dialog-header">
+      <div class="dialog-title">新建定时任务</div>
+    </div>
+    <div class="tab-content" style="padding-top: 16px;">
+      <!-- Task Type -->
+      <div class="form-group">
+        <label class="form-label">任务类型</label>
+        <div class="presets">
+          <button class="preset-chip">周期性（Cron）</button>
+          <button class="preset-chip selected">一次性（At）</button>
+        </div>
+      </div>
+
+      <!-- At Time Picker -->
+      <div class="form-group">
+        <label class="form-label">执行时间</label>
+        <input type="text" class="form-input" value="2026-03-10  09:00" placeholder="选择日期和时间">
+        <div class="form-hint">指定一个未来时间点，到时执行一次后自动禁用</div>
+      </div>
+
+      <!-- Prompt -->
+      <div class="form-group">
+        <label class="form-label">执行 Prompt</label>
+        <textarea class="form-textarea" placeholder="定时任务触发时发送给 Agent 的消息...">提醒我：明天上午 10 点有产品评审会议</textarea>
+        <div class="form-hint">此 prompt 将在指定时间自动发送给 Agent</div>
+      </div>
+
+      <!-- Session Strategy -->
+      <div class="form-group">
+        <label class="form-label">Session 策略</label>
+        <select class="form-select">
+          <option selected>固定 Session（复用同一会话）</option>
+          <option>每次新建 Session</option>
+        </select>
+        <div class="form-hint">固定：执行发到同一个对话；新建：创建独立对话</div>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button class="btn btn-sm btn-outline">取消</button>
+      <button class="btn btn-sm btn-primary">创建</button>
+    </div>
+  </div>
+</div>
+<div class="annotation">
+  <strong>交互说明：</strong>
+  ① 选择"一次性（At）"后隐藏 cron 表达式和预设，显示日期时间选择器；
+  ② 不允许选择过去的时间，选中时校验；
+  ③ At 类型任务执行完后自动 enabled=false，卡片上显示"已完成"标签。
+</div>
+
+<!-- ===================== STATE 3b: Validation Error ===================== -->
+<div class="section-label">状态 3b — 表单校验错误</div>
+<div class="section-desc">Cron 表达式无效时的错误状态</div>
+
+<div class="dialog-overlay">
+  <div class="dialog" style="max-height: 340px;">
+    <div class="dialog-header">
+      <div class="dialog-title">新建定时任务</div>
+    </div>
+    <div class="tab-content" style="padding-top: 16px;">
+      <div class="form-group">
+        <label class="form-label">Cron 表达式</label>
+        <input type="text" class="form-input mono error" value="0 25 * * *">
+        <div class="form-error">无效的 cron 表达式：小时值必须在 0-23 范围内</div>
+        <div class="presets">
+          <button class="preset-chip">每小时</button>
+          <button class="preset-chip">每天 9:00</button>
+          <button class="preset-chip">每天 18:00</button>
+          <button class="preset-chip">每周一 9:00</button>
+          <button class="preset-chip">每月 1 号</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">执行 Prompt</label>
+        <textarea class="form-textarea error" placeholder="定时任务触发时发送给 Agent 的消息..." style="border-color: var(--destructive); min-height: 40px;"></textarea>
+        <div class="form-error">请输入执行 Prompt</div>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button class="btn btn-sm btn-outline">取消</button>
+      <button class="btn btn-sm btn-primary" style="opacity: 0.5; cursor: not-allowed;">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== STATE 4: Delete Confirm ===================== -->
+<div class="section-label">状态 4 — 删除确认弹窗</div>
+<div class="section-desc">点击删除按钮后的 AlertDialog 确认</div>
+
+<div class="dialog-overlay">
+  <div class="dialog" style="width: 400px; max-height: 200px;">
+    <div class="tab-content" style="text-align: center; padding: 24px;">
+      <div style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">确认删除定时任务？</div>
+      <p style="font-size: 13px; color: var(--muted-foreground); margin-bottom: 20px;">
+        将删除任务 <strong style="color: var(--foreground);">"0 9 * * * — 抓取 HackerNews..."</strong> 及其所有执行历史，此操作不可撤销。
+      </p>
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button class="btn btn-sm btn-outline">取消</button>
+        <button class="btn btn-sm" style="background: var(--destructive); color: var(--destructive-foreground);">删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== STATE 5: History Expanded ===================== -->
+<div class="section-label">状态 5 — 执行历史展开详情</div>
+<div class="section-desc">卡片展开后显示执行历史，包含成功/失败/跳过状态</div>
+
+<div class="dialog-overlay">
+  <div class="dialog" style="max-height: 420px;">
+    <div class="dialog-header">
+      <div class="dialog-title">Agent 设置 — 新闻助手</div>
+    </div>
+    <div class="tabs-list">
+      <button class="tab-trigger">基本信息</button>
+      <button class="tab-trigger active">定时任务</button>
+    </div>
+    <div class="tab-content">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+        <span style="font-size: 12px; color: var(--muted-foreground);">共 1 个任务</span>
+        <button class="btn btn-sm btn-primary">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新建任务
+        </button>
+      </div>
+
+      <div class="cron-list">
+        <div class="cron-card">
+          <div class="cron-card-header">
+            <div class="cron-card-left">
+              <span class="cron-expr-badge">*/30 * * * *</span>
+              <span class="cron-prompt-text">检查服务器日志中的 ERROR</span>
+            </div>
+            <div class="cron-card-actions">
+              <button class="switch on"></button>
+              <button class="btn-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg></button>
+              <button class="btn-icon destructive"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+            </div>
+          </div>
+          <div class="cron-card-meta">
+            <span class="meta-item">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              每 30 分钟
+            </span>
+            <span class="meta-item">下次执行：2026-03-09 16:00</span>
+            <button class="collapsible-trigger open">
+              <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform: rotate(90deg);"><polyline points="9 18 15 12 9 6"/></svg>
+              执行历史
+            </button>
+          </div>
+          <div class="history-panel" style="display: block;">
+            <div class="history-row">
+              <span class="history-time">2026-03-09 15:30:02</span>
+              <span class="status-badge status-success">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                成功
+              </span>
+              <span class="history-duration">耗时 12s</span>
+              <a class="history-session-link">查看对话 →</a>
+            </div>
+            <div class="history-row">
+              <span class="history-time">2026-03-09 15:00:01</span>
+              <span class="status-badge status-failed">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                失败
+              </span>
+              <span class="history-duration">耗时 3s</span>
+              <a class="history-session-link">查看对话 →</a>
+            </div>
+            <div class="history-row">
+              <span class="history-time">2026-03-09 14:30:00</span>
+              <span class="status-badge status-skipped">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m5 4 10 8-10 8z"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+                跳过
+              </span>
+              <span class="history-duration">—</span>
+              <span style="font-size: 11px; color: var(--muted-foreground); margin-left: auto;">上次执行未完成</span>
+            </div>
+            <div class="history-row">
+              <span class="history-time">2026-03-09 14:00:03</span>
+              <span class="status-badge status-success">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                成功
+              </span>
+              <span class="history-duration">耗时 45s</span>
+              <a class="history-session-link">查看对话 →</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="annotation">
+  <strong>交互说明：</strong>
+  ① 成功 = 绿色徽标，失败 = 红色徽标，跳过 = 橙色徽标（因上次执行未完成/并发保护）；
+  ② 失败记录可再展开查看错误详情（此处省略二级展开）；
+  ③ "查看对话"链接关闭 Dialog 并跳转到对应 Session；
+  ④ 默认展示最近 10 条，超出可分页加载。
+</div>
+
+<hr class="sep">
+
+<!-- ===================== APPENDIX: Component Map ===================== -->
+<div class="section-label">附录 A — 组件映射表</div>
+<div class="section-desc">设计稿中各元素对应的 React 组件和 shadcn/ui 组件</div>
+
+<div class="dialog-overlay" style="padding: 20px 32px;">
+  <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+    <thead>
+      <tr style="border-bottom: 2px solid var(--border); text-align: left;">
+        <th style="padding: 8px 12px; font-weight: 600;">设计元素</th>
+        <th style="padding: 8px 12px; font-weight: 600;">React 组件</th>
+        <th style="padding: 8px 12px; font-weight: 600;">shadcn/ui 依赖</th>
+        <th style="padding: 8px 12px; font-weight: 600;">状态</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom: 1px solid var(--border);">
+        <td style="padding: 8px 12px;">顶栏 ⏰ 入口按钮</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">ChatPanel.tsx</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">button.tsx, tooltip.tsx <span style="color: var(--green);">✓ 已有</span></td>
+        <td style="padding: 8px 12px;"><span class="status-badge status-failed">待开发</span></td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--border);">
+        <td style="padding: 8px 12px;">定时任务面板</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">CronJobPanel.tsx <span style="color: var(--destructive);">← 新增</span></td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">dialog.tsx <span style="color: var(--green);">✓ 已有</span></td>
+        <td style="padding: 8px 12px;"><span class="status-badge status-failed">待开发</span></td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--border);">
+        <td style="padding: 8px 12px;">任务列表</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">CronJobTab.tsx</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">scroll-area.tsx</td>
+        <td style="padding: 8px 12px;"><span class="status-badge status-failed">待开发</span></td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--border);">
+        <td style="padding: 8px 12px;">任务卡片</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">CronJobCard.tsx</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">switch.tsx, collapsible.tsx</td>
+        <td style="padding: 8px 12px;"><span class="status-badge status-failed">待开发</span></td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--border);">
+        <td style="padding: 8px 12px;">创建/编辑表单</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">CronJobForm.tsx</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">dialog.tsx, input.tsx, textarea.tsx, select.tsx, label.tsx</td>
+        <td style="padding: 8px 12px;"><span class="status-badge status-failed">待开发</span></td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--border);">
+        <td style="padding: 8px 12px;">Cron 表达式输入</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">CronExprInput.tsx</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">input.tsx</td>
+        <td style="padding: 8px 12px;"><span class="status-badge status-failed">待开发</span></td>
+      </tr>
+      <tr style="border-bottom: 1px solid var(--border);">
+        <td style="padding: 8px 12px;">执行历史</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">CronJobHistory.tsx</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">collapsible.tsx</td>
+        <td style="padding: 8px 12px;"><span class="status-badge status-failed">待开发</span></td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px;">删除确认</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">—（内联）</td>
+        <td style="padding: 8px 12px; font-family: monospace; font-size: 11px;">alert-dialog.tsx <span style="color: var(--green);">✓ 已有</span></td>
+        <td style="padding: 8px 12px;"><span class="status-badge status-success">可复用</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div style="max-width: 900px; margin: 40px auto; text-align: center; font-size: 12px; color: var(--muted-foreground);">
+  — 设计稿结束 —
+</div>
+
+</body>
+</html>

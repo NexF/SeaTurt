@@ -33,6 +33,7 @@ func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS) *Ser
 	agentHandler := NewAgentHandler(mgr)
 	chatHandler := NewChatHandler(mgr, maxImageSize)
 	fileHandler := NewFileHandler(mgr)
+	sessionHandler := NewSessionHandler(mgr)
 
 	api := engine.Group("/api")
 	{
@@ -59,12 +60,18 @@ func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS) *Ser
 			// Desktop
 			agents.GET("/:id/desktop", agentHandler.GetDesktop)
 
-			// Chat
-			agents.POST("/:id/chat", chatHandler.Chat)
-			agents.POST("/:id/chat/cancel", chatHandler.CancelChat)
-			agents.POST("/:id/chat/cancel-tool/:toolCallId", chatHandler.CancelToolCall)
-			agents.GET("/:id/history", chatHandler.GetHistory)
-			agents.DELETE("/:id/history", chatHandler.DeleteHistory)
+			// Sessions
+			agents.GET("/:id/sessions", sessionHandler.ListSessions)
+			agents.POST("/:id/sessions", sessionHandler.CreateSession)
+			agents.PUT("/:id/sessions/:sid", sessionHandler.UpdateSession)
+			agents.DELETE("/:id/sessions/:sid", sessionHandler.DeleteSession)
+
+			// Chat (session-level)
+			agents.POST("/:id/sessions/:sid/chat", chatHandler.Chat)
+			agents.POST("/:id/sessions/:sid/chat/cancel", chatHandler.CancelChat)
+			agents.POST("/:id/sessions/:sid/chat/cancel-tool/:toolCallId", chatHandler.CancelToolCall)
+			agents.GET("/:id/sessions/:sid/history", chatHandler.GetHistory)
+			agents.DELETE("/:id/sessions/:sid/history", chatHandler.DeleteHistory)
 
 			// Workspace files
 			agents.GET("/:id/files", fileHandler.ListFiles)

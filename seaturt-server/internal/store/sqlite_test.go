@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,27 +52,45 @@ func newTestAgent(t *testing.T, s *Store) *agent.Agent {
 	return ag
 }
 
+// newTestSession creates a test session for the given agent.
+func newTestSession(t *testing.T, s *Store, agentID string) *agent.Session {
+	t.Helper()
+	now := time.Now()
+	sess := &agent.Session{
+		ID:        "sess_test_1",
+		AgentID:   agentID,
+		Title:     "新对话",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	require.NoError(t, s.CreateSession(sess))
+	return sess
+}
+
 // IT-20: multimodal message store and retrieve roundtrip
 func TestMessageStoreRoundtrip_TextOnly(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	ag := newTestAgent(t, s)
+	sess := newTestSession(t, s, ag.ID)
 
 	msg := &agent.Message{
 		ID:        "msg_1",
 		AgentID:   ag.ID,
+		SessionID: sess.ID,
 		Role:      "user",
 		Content:   llm.Content{llm.NewTextContent("hello world")},
 		CreatedAt: time.Now(),
 	}
 	require.NoError(t, s.CreateMessage(msg))
 
-	messages, err := s.ListMessages(ag.ID)
+	messages, err := s.ListMessagesBySession(sess.ID)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 
 	assert.Equal(t, "msg_1", messages[0].ID)
 	assert.Equal(t, "user", messages[0].Role)
+	assert.Equal(t, sess.ID, messages[0].SessionID)
 	require.Len(t, messages[0].Content, 1)
 	assert.Equal(t, "text", messages[0].Content[0].Type)
 	assert.Equal(t, "hello world", messages[0].Content[0].Text)
@@ -82,15 +101,17 @@ func TestMessageStoreRoundtrip_ImageExternalized(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	ag := newTestAgent(t, s)
+	sess := newTestSession(t, s, ag.ID)
 
 	// Create a small PNG-like base64 data
 	rawImage := []byte("fake-png-data-for-testing")
 	b64Data := base64.StdEncoding.EncodeToString(rawImage)
 
 	msg := &agent.Message{
-		ID:      "msg_img_1",
-		AgentID: ag.ID,
-		Role:    "user",
+		ID:        "msg_img_1",
+		AgentID:   ag.ID,
+		SessionID: sess.ID,
+		Role:      "user",
 		Content: llm.Content{
 			llm.NewTextContent("check this image"),
 			llm.NewImageContent(b64Data, "image/png"),
@@ -113,7 +134,7 @@ func TestMessageStoreRoundtrip_ImageExternalized(t *testing.T) {
 	assert.Equal(t, rawImage, fileData)
 
 	// Retrieve and verify roundtrip
-	messages, err := s.ListMessages(ag.ID)
+	messages, err := s.ListMessagesBySession(sess.ID)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	require.Len(t, messages[0].Content, 2)
@@ -135,14 +156,16 @@ func TestMessageStoreRoundtrip_MultipleImages(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	ag := newTestAgent(t, s)
+	sess := newTestSession(t, s, ag.ID)
 
 	img1 := base64.StdEncoding.EncodeToString([]byte("image-one"))
 	img2 := base64.StdEncoding.EncodeToString([]byte("image-two"))
 
 	msg := &agent.Message{
-		ID:      "msg_multi_img",
-		AgentID: ag.ID,
-		Role:    "tool",
+		ID:        "msg_multi_img",
+		AgentID:   ag.ID,
+		SessionID: sess.ID,
+		Role:      "tool",
 		Content: llm.Content{
 			llm.NewTextContent("here are two images"),
 			llm.NewImageContent(img1, "image/jpeg"),
@@ -159,7 +182,7 @@ func TestMessageStoreRoundtrip_MultipleImages(t *testing.T) {
 	assert.Len(t, entries, 2, "should have two uploaded files")
 
 	// Verify roundtrip
-	messages, err := s.ListMessages(ag.ID)
+	messages, err := s.ListMessagesBySession(sess.ID)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	require.Len(t, messages[0].Content, 3)
@@ -175,10 +198,12 @@ func TestMessageStore_TextOnly_NoUploads(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	ag := newTestAgent(t, s)
+	sess := newTestSession(t, s, ag.ID)
 
 	msg := &agent.Message{
 		ID:        "msg_text",
 		AgentID:   ag.ID,
+		SessionID: sess.ID,
 		Role:      "assistant",
 		Content:   llm.Content{llm.NewTextContent("just text")},
 		CreatedAt: time.Now(),
@@ -191,15 +216,17 @@ func TestMessageStore_TextOnly_NoUploads(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "uploads dir should not be created for text-only messages")
 }
 
-// IT-20c: delete messages
+// IT-20c: delete messages by agent
 func TestMessageStore_DeleteMessages(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	ag := newTestAgent(t, s)
+	sess := newTestSession(t, s, ag.ID)
 
 	msg := &agent.Message{
 		ID:        "msg_del",
 		AgentID:   ag.ID,
+		SessionID: sess.ID,
 		Role:      "user",
 		Content:   llm.Content{llm.NewTextContent("to be deleted")},
 		CreatedAt: time.Now(),
@@ -215,4 +242,229 @@ func TestMessageStore_DeleteMessages(t *testing.T) {
 	messages, err = s.ListMessages(ag.ID)
 	require.NoError(t, err)
 	assert.Empty(t, messages)
+}
+
+// --- Session CRUD tests ---
+
+func TestSessionCRUD_CreateAndList(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ag := newTestAgent(t, s)
+
+	now := time.Now()
+	sess1 := &agent.Session{
+		ID: "sess_1", AgentID: ag.ID, Title: "新对话",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	sess2 := &agent.Session{
+		ID: "sess_2", AgentID: ag.ID, Title: "代码审查",
+		CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second),
+	}
+
+	require.NoError(t, s.CreateSession(sess1))
+	require.NoError(t, s.CreateSession(sess2))
+
+	sessions, err := s.ListSessions(ag.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 2)
+	// Should be ordered by updated_at DESC
+	assert.Equal(t, "sess_2", sessions[0].ID)
+	assert.Equal(t, "sess_1", sessions[1].ID)
+}
+
+func TestSessionCRUD_GetSession(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ag := newTestAgent(t, s)
+
+	now := time.Now()
+	sess := &agent.Session{
+		ID: "sess_get", AgentID: ag.ID, Title: "测试会话",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, s.CreateSession(sess))
+
+	got, err := s.GetSession("sess_get")
+	require.NoError(t, err)
+	assert.Equal(t, "测试会话", got.Title)
+	assert.Equal(t, ag.ID, got.AgentID)
+}
+
+func TestSessionCRUD_GetSession_NotFound(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+
+	_, err := s.GetSession("nonexistent")
+	assert.Error(t, err)
+}
+
+func TestSessionCRUD_UpdateSession(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ag := newTestAgent(t, s)
+
+	now := time.Now()
+	sess := &agent.Session{
+		ID: "sess_upd", AgentID: ag.ID, Title: "新对话",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, s.CreateSession(sess))
+
+	sess.Title = "帮我写代码"
+	sess.UpdatedAt = now.Add(time.Minute)
+	require.NoError(t, s.UpdateSession(sess))
+
+	got, err := s.GetSession("sess_upd")
+	require.NoError(t, err)
+	assert.Equal(t, "帮我写代码", got.Title)
+}
+
+func TestSessionCRUD_DeleteSession(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ag := newTestAgent(t, s)
+
+	now := time.Now()
+	sess := &agent.Session{
+		ID: "sess_del", AgentID: ag.ID, Title: "即将删除",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, s.CreateSession(sess))
+
+	require.NoError(t, s.DeleteSession("sess_del"))
+
+	_, err := s.GetSession("sess_del")
+	assert.Error(t, err)
+}
+
+// Session 级联清理 messages 测试
+func TestSessionDelete_CascadeMessages(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ag := newTestAgent(t, s)
+
+	now := time.Now()
+	sess := &agent.Session{
+		ID: "sess_cascade", AgentID: ag.ID, Title: "级联测试",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, s.CreateSession(sess))
+
+	// Create messages in this session
+	for i := 0; i < 3; i++ {
+		msg := &agent.Message{
+			ID:        fmt.Sprintf("msg_cascade_%d", i),
+			AgentID:   ag.ID,
+			SessionID: sess.ID,
+			Role:      "user",
+			Content:   llm.Content{llm.NewTextContent(fmt.Sprintf("message %d", i))},
+			CreatedAt: now.Add(time.Duration(i) * time.Second),
+		}
+		require.NoError(t, s.CreateMessage(msg))
+	}
+
+	// Verify messages exist
+	messages, err := s.ListMessagesBySession(sess.ID)
+	require.NoError(t, err)
+	assert.Len(t, messages, 3)
+
+	// Delete session (should cascade delete messages)
+	require.NoError(t, s.DeleteSession(sess.ID))
+
+	// Verify messages are gone
+	messages, err = s.ListMessagesBySession(sess.ID)
+	require.NoError(t, err)
+	assert.Empty(t, messages)
+}
+
+// Message 按 session_id 隔离查询测试
+func TestMessageIsolationBySession(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ag := newTestAgent(t, s)
+
+	now := time.Now()
+	sess1 := &agent.Session{
+		ID: "sess_iso_1", AgentID: ag.ID, Title: "会话1",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	sess2 := &agent.Session{
+		ID: "sess_iso_2", AgentID: ag.ID, Title: "会话2",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, s.CreateSession(sess1))
+	require.NoError(t, s.CreateSession(sess2))
+
+	// Add messages to different sessions
+	msg1 := &agent.Message{
+		ID: "msg_iso_1", AgentID: ag.ID, SessionID: sess1.ID,
+		Role: "user", Content: llm.Content{llm.NewTextContent("hello from session 1")},
+		CreatedAt: now,
+	}
+	msg2 := &agent.Message{
+		ID: "msg_iso_2", AgentID: ag.ID, SessionID: sess2.ID,
+		Role: "user", Content: llm.Content{llm.NewTextContent("hello from session 2")},
+		CreatedAt: now,
+	}
+	require.NoError(t, s.CreateMessage(msg1))
+	require.NoError(t, s.CreateMessage(msg2))
+
+	// Verify isolation
+	msgs1, err := s.ListMessagesBySession(sess1.ID)
+	require.NoError(t, err)
+	require.Len(t, msgs1, 1)
+	assert.Equal(t, "hello from session 1", msgs1[0].Content[0].Text)
+
+	msgs2, err := s.ListMessagesBySession(sess2.ID)
+	require.NoError(t, err)
+	require.Len(t, msgs2, 1)
+	assert.Equal(t, "hello from session 2", msgs2[0].Content[0].Text)
+
+	// ListMessages by agent should return both
+	allMsgs, err := s.ListMessages(ag.ID)
+	require.NoError(t, err)
+	assert.Len(t, allMsgs, 2)
+}
+
+// Delete messages by session only
+func TestDeleteMessagesBySession(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ag := newTestAgent(t, s)
+
+	now := time.Now()
+	sess1 := &agent.Session{
+		ID: "sess_dms_1", AgentID: ag.ID, Title: "会话1",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	sess2 := &agent.Session{
+		ID: "sess_dms_2", AgentID: ag.ID, Title: "会话2",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, s.CreateSession(sess1))
+	require.NoError(t, s.CreateSession(sess2))
+
+	msg1 := &agent.Message{
+		ID: "msg_dms_1", AgentID: ag.ID, SessionID: sess1.ID,
+		Role: "user", Content: llm.Content{llm.NewTextContent("sess1 msg")},
+		CreatedAt: now,
+	}
+	msg2 := &agent.Message{
+		ID: "msg_dms_2", AgentID: ag.ID, SessionID: sess2.ID,
+		Role: "user", Content: llm.Content{llm.NewTextContent("sess2 msg")},
+		CreatedAt: now,
+	}
+	require.NoError(t, s.CreateMessage(msg1))
+	require.NoError(t, s.CreateMessage(msg2))
+
+	// Delete only session 1 messages
+	require.NoError(t, s.DeleteMessagesBySession(sess1.ID))
+
+	msgs1, err := s.ListMessagesBySession(sess1.ID)
+	require.NoError(t, err)
+	assert.Empty(t, msgs1)
+
+	msgs2, err := s.ListMessagesBySession(sess2.ID)
+	require.NoError(t, err)
+	assert.Len(t, msgs2, 1)
 }

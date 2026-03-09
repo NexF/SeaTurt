@@ -47,9 +47,18 @@ export interface ContentBlock {
   }
 }
 
+export interface Session {
+  id: string
+  agent_id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
 export interface Message {
   id: string
   agent_id: string
+  session_id: string
   role: "user" | "assistant" | "tool"
   content: string | ContentBlock[]
   reasoning_content?: string

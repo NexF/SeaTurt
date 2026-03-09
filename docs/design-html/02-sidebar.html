@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SeaTurt 设计稿 — 02 侧边栏（Agent + Session 列表）</title>
+<style>
+  :root {
+    --bg-main: #1e1e2e; --bg-sidebar: #181825; --bg-deepest: #11111b;
+    --text-primary: #cdd6f4; --text-secondary: #6c7086;
+    --accent: #89b4fa; --border: #313244;
+    --user-bubble: #313244; --success: #a6e3a1; --error: #f38ba8;
+    --orange: #fab387; --radius-card: 8px; --radius-btn: 6px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Inter", -apple-system, sans-serif; font-size: 14px; line-height: 1.6;
+    background: #0e0e16; color: var(--text-primary); padding: 40px 32px; max-width: 1400px; margin: 0 auto;
+  }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  h2 { font-size: 22px; font-weight: 600; margin: 48px 0 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 17px; font-weight: 600; margin: 32px 0 12px; color: var(--accent); }
+  p { margin: 8px 0; color: var(--text-secondary); }
+  code { font-family: "JetBrains Mono", monospace; font-size: 13px; background: var(--bg-deepest); padding: 2px 6px; border-radius: 4px; color: var(--orange); }
+  .nav-bar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 32px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .nav-bar a { padding: 6px 14px; border-radius: var(--radius-btn); background: var(--user-bubble); color: var(--text-primary); font-size: 13px; text-decoration: none; transition: background 0.15s; }
+  .nav-bar a:hover { background: var(--accent); color: var(--bg-deepest); }
+  .nav-bar a.active { background: var(--accent); color: var(--bg-deepest); }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-size: 13px; }
+  th { background: var(--bg-deepest); color: var(--text-primary); font-weight: 600; }
+  td { color: var(--text-secondary); }
+  .note-box { background: rgba(137,180,250,0.06); border-left: 3px solid var(--accent); padding: 12px 16px; border-radius: 0 var(--radius-card) var(--radius-card) 0; margin: 12px 0; font-size: 13px; }
+  .note-box strong { color: var(--text-primary); }
+
+  .mockup-container { background: var(--bg-deepest); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; margin: 20px 0; }
+
+  /* 侧边栏 mockup */
+  .sidebar-mockup {
+    width: 280px; background: var(--bg-sidebar); padding: 20px 16px;
+    font-size: 13px; min-height: 600px; display: flex; flex-direction: column;
+  }
+  .sidebar-logo { font-size: 18px; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+  .sidebar-logo span { font-size: 22px; }
+  .btn-new-agent {
+    width: 100%; padding: 10px; border: 1px dashed var(--border); border-radius: var(--radius-btn);
+    background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 13px;
+    margin-bottom: 20px; transition: all 0.15s;
+  }
+  .btn-new-agent:hover { border-color: var(--accent); color: var(--accent); }
+
+  .agent-card {
+    background: var(--bg-deepest); border-radius: var(--radius-card);
+    padding: 12px 14px; margin-bottom: 10px;
+    border: 1px solid transparent; cursor: pointer; transition: all 0.15s;
+  }
+  .agent-card:hover { border-color: var(--border); }
+  .agent-card.active { border-color: var(--accent); }
+  .agent-header { display: flex; align-items: center; gap: 8px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .status-dot.running { background: var(--success); }
+  .status-dot.stopped { background: var(--text-secondary); }
+  .status-dot.error { background: var(--error); }
+  .agent-name { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+  .agent-model { font-size: 11px; color: var(--text-secondary); margin-top: 3px; margin-left: 16px; }
+
+  .btn-new-session {
+    display: flex; align-items: center; gap: 4px;
+    padding: 5px 8px; margin: 8px 0 4px 12px;
+    font-size: 11px; color: var(--accent);
+    cursor: pointer; border: none; background: transparent;
+    border-radius: 4px; transition: background 0.1s;
+  }
+  .btn-new-session:hover { background: rgba(137,180,250,0.08); }
+
+  .session-list { margin: 0 0 0 12px; }
+  .session-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 10px; border-radius: 4px; cursor: pointer;
+    font-size: 12px; color: var(--text-secondary); transition: background 0.1s;
+    position: relative;
+  }
+  .session-item:hover { background: rgba(137,180,250,0.08); }
+  .session-item.active { background: rgba(137,180,250,0.12); color: var(--text-primary); }
+  .session-item .time { font-size: 10px; }
+  .session-item .delete-btn {
+    display: none; position: absolute; right: 6px;
+    background: transparent; border: none; color: var(--error); font-size: 12px; cursor: pointer;
+  }
+  .session-item:hover .delete-btn { display: block; }
+  .session-item:hover .time { display: none; }
+
+  .theme-toggle {
+    margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border);
+    font-size: 13px; color: var(--text-secondary); cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .theme-toggle:hover { color: var(--text-primary); }
+
+  /* 并排 mockup */
+  .side-by-side { display: flex; gap: 24px; flex-wrap: wrap; margin: 20px 0; }
+  .side-by-side > div { flex: 1; min-width: 280px; }
+
+  /* 层级结构树 */
+  .tree { font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 2; color: var(--text-secondary); background: var(--bg-deepest); padding: 16px 20px; border-radius: var(--radius-card); border: 1px solid var(--border); margin: 12px 0; }
+  .tree .highlight { color: var(--accent); }
+  .tree .green { color: var(--success); }
+  .tree .dim { color: var(--text-secondary); opacity: 0.6; }
+
+  /* 右键菜单 */
+  .ctx-menu {
+    background: var(--bg-deepest); border: 1px solid var(--border); border-radius: var(--radius-card);
+    padding: 6px 0; width: 160px; font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .ctx-menu .item {
+    padding: 7px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+    color: var(--text-secondary); transition: background 0.1s;
+  }
+  .ctx-menu .item:hover { background: rgba(137,180,250,0.1); color: var(--text-primary); }
+  .ctx-menu .item.danger:hover { background: rgba(243,139,168,0.1); color: var(--error); }
+  .ctx-menu .sep { height: 1px; background: var(--border); margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<nav class="nav-bar">
+  <a href="01-layout-overview.html">01 整体布局</a>
+  <a href="02-sidebar.html" class="active">02 侧边栏</a>
+  <a href="03-chat-panel.html">03 对话面板</a>
+  <a href="04-workspace.html">04 Workspace</a>
+  <a href="05-interactions.html">05 交互细节</a>
+  <a href="06-theme-responsive.html">06 主题 &amp; 响应式</a>
+  <a href="07-cron-job.html">07 定时任务</a>
+</nav>
+
+<h1>02 — 左侧边栏：Agent + Session 列表</h1>
+<p>固定 240px，展示所有 Agent 及其下属 Session 的树形列表。</p>
+
+<!-- ===== 层级结构 ===== -->
+<h2>层级结构</h2>
+
+<div class="tree">
+侧边栏<br>
+├─ + 新建 Agent（按钮）<br>
+├─ <span class="highlight">▾ Agent: coder</span> (<span class="green">● running</span>)&nbsp;&nbsp;&nbsp;&nbsp;← 点击展开/折叠 Session 列表<br>
+│&nbsp;&nbsp; ├─ [+ 新对话]&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← 快速新建 Session<br>
+│&nbsp;&nbsp; ├─ 整理周报&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 3月5日&nbsp;&nbsp;&nbsp;&nbsp;← Session 条目（名称 + 时间）<br>
+│&nbsp;&nbsp; ├─ 数据分析&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 3月6日<br>
+│&nbsp;&nbsp; └─ <span class="highlight">● 代码审查</span>&nbsp;&nbsp;&nbsp;&nbsp; 3月8日&nbsp;&nbsp;&nbsp;&nbsp;← 当前活跃 Session（高亮）<br>
+├─ <span class="dim">▸ Agent: writer</span> (○ stopped)&nbsp;&nbsp;&nbsp;&nbsp;← 折叠状态，不显示 Session<br>
+└─ 主题切换 🌙/☀️
+</div>
+
+<!-- ===== 完整 Mockup ===== -->
+<h2>完整侧边栏 Mockup</h2>
+
+<div class="side-by-side">
+  <!-- 展开状态 -->
+  <div>
+    <h3>展开状态（有活跃 Session）</h3>
+    <div class="mockup-container">
+      <div class="sidebar-mockup">
+        <div class="sidebar-logo"><span>🐢</span> SeaTurt</div>
+        <button class="btn-new-agent">+ 新建 Agent</button>
+
+        <div class="agent-card active">
+          <div class="agent-header">
+            <div class="status-dot running"></div>
+            <span class="agent-name">coder</span>
+          </div>
+          <div class="agent-model">gpt-4o</div>
+          <button class="btn-new-session">+ 新对话</button>
+          <div class="session-list">
+            <div class="session-item">
+              <span>整理周报</span><span class="time">3月5日</span>
+              <button class="delete-btn">🗑</button>
+            </div>
+            <div class="session-item">
+              <span>数据分析</span><span class="time">3月6日</span>
+              <button class="delete-btn">🗑</button>
+            </div>
+            <div class="session-item active">
+              <span>● 代码审查</span><span class="time">3月8日</span>
+              <button class="delete-btn">🗑</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="agent-card">
+          <div class="agent-header">
+            <div class="status-dot stopped"></div>
+            <span class="agent-name">writer</span>
+          </div>
+          <div class="agent-model">claude-3.5-sonnet</div>
+        </div>
+
+        <div class="agent-card">
+          <div class="agent-header">
+            <div class="status-dot error"></div>
+            <span class="agent-name">data-analyst</span>
+          </div>
+          <div class="agent-model">gpt-4o-mini</div>
+        </div>
+
+        <div class="theme-toggle">🌙 深色主题</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右键菜单 -->
+  <div>
+    <h3>Agent 右键菜单</h3>
+    <div class="mockup-container" style="padding:32px; display:flex; align-items:start; gap: 20px;">
+      <div class="agent-card" style="margin:0; width:200px;">
+        <div class="agent-header">
+          <div class="status-dot running"></div>
+          <span class="agent-name">coder</span>
+        </div>
+        <div class="agent-model">gpt-4o</div>
+      </div>
+      <div class="ctx-menu">
+        <div class="item">⏸ 停止</div>
+        <div class="sep"></div>
+        <div class="item">⚙ 设置</div>
+        <div class="item">📋 复制 ID</div>
+        <div class="sep"></div>
+        <div class="item danger">🗑 删除</div>
+      </div>
+    </div>
+    <div class="note-box" style="margin-top:16px">
+      <strong>右键菜单规则：</strong><br>
+      • 运行中 → 显示"停止"，隐藏"启动"<br>
+      • 已停止 → 显示"启动"，隐藏"停止"<br>
+      • 删除需二次确认
+    </div>
+
+    <h3 style="margin-top:32px">已停止的 Agent 右键菜单</h3>
+    <div class="mockup-container" style="padding:32px; display:flex; align-items:start; gap: 20px;">
+      <div class="agent-card" style="margin:0; width:200px;">
+        <div class="agent-header">
+          <div class="status-dot stopped"></div>
+          <span class="agent-name">writer</span>
+        </div>
+        <div class="agent-model">claude-3.5-sonnet</div>
+      </div>
+      <div class="ctx-menu">
+        <div class="item">▶ 启动</div>
+        <div class="sep"></div>
+        <div class="item">⚙ 设置</div>
+        <div class="item">📋 复制 ID</div>
+        <div class="sep"></div>
+        <div class="item danger">🗑 删除</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 行为说明 ===== -->
+<h2>交互行为</h2>
+
+<h3>Agent 卡片行为</h3>
+<table>
+  <thead><tr><th>操作</th><th>行为</th></tr></thead>
+  <tbody>
+    <tr><td>点击 Agent 名称区域</td><td>展开/折叠该 Agent 的 Session 列表</td></tr>
+    <tr><td>展开时</td><td>自动选中最近的 Session（如果没有则新建一个）</td></tr>
+    <tr><td>状态图标</td><td>● running（绿） / ○ stopped（灰） / ⚠ error（红）显示在名称左侧</td></tr>
+    <tr><td>模型名</td><td>显示在 Agent 名称下方（次要文字，<code>text-xs</code> 灰色）</td></tr>
+    <tr><td>右键菜单</td><td>启动/停止/设置/复制ID/删除</td></tr>
+  </tbody>
+</table>
+
+<h3>Session 条目行为</h3>
+<table>
+  <thead><tr><th>操作</th><th>行为</th></tr></thead>
+  <tbody>
+    <tr><td>点击</td><td>切换到该 Session 的对话</td></tr>
+    <tr><td>名称</td><td>取首条用户消息的前 20 字作为标题，未发送过消息的显示"新对话"</td></tr>
+    <tr><td>右侧时间</td><td>今天显示时分，之前显示月日</td></tr>
+    <tr><td>当前选中</td><td>高亮背景（<code>rgba(137,180,250,0.12)</code>）</td></tr>
+    <tr><td>鼠标 hover</td><td>显示删除按钮 🗑（替换时间显示），点击需二次确认</td></tr>
+  </tbody>
+</table>
+
+<h3>[+ 新对话] 按钮</h3>
+<table>
+  <thead><tr><th>属性</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>位置</td><td>Agent 展开后的 Session 列表顶部</td></tr>
+    <tr><td>点击效果</td><td>创建新 Session → 自动选中并切换到空对话</td></tr>
+    <tr><td>Agent 未运行时</td><td>也可以创建 Session（但输入框禁用，提示"请先启动 Agent"）</td></tr>
+  </tbody>
+</table>
+
+<!-- ===== 选中逻辑 ===== -->
+<h2>选中逻辑流程</h2>
+
+<div class="mockup-container" style="padding:24px;">
+  <div style="display:flex; flex-direction:column; gap:12px; font-size:13px;">
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="background:var(--user-bubble); padding:8px 14px; border-radius:var(--radius-card); white-space:nowrap;">用户点击 Agent</div>
+      <div style="color:var(--accent);">→</div>
+      <div style="background:var(--user-bubble); padding:8px 14px; border-radius:var(--radius-card); white-space:nowrap;">展开 Session 列表</div>
+      <div style="color:var(--accent);">→</div>
+      <div style="background:rgba(166,227,161,0.15); padding:8px 14px; border-radius:var(--radius-card); color:var(--success);">自动选中最近的 Session</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px; margin-left:40px;">
+      <div style="color:var(--text-secondary);">如果没有 Session</div>
+      <div style="color:var(--accent);">→</div>
+      <div style="background:rgba(249,226,175,0.15); padding:8px 14px; border-radius:var(--radius-card); color:var(--orange);">自动创建一个新 Session</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="background:var(--user-bubble); padding:8px 14px; border-radius:var(--radius-card); white-space:nowrap;">用户点击 Session</div>
+      <div style="color:var(--accent);">→</div>
+      <div style="background:rgba(166,227,161,0.15); padding:8px 14px; border-radius:var(--radius-card); color:var(--success);">切换到该 Session 的对话</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="background:var(--user-bubble); padding:8px 14px; border-radius:var(--radius-card); white-space:nowrap;">用户点击 [+ 新对话]</div>
+      <div style="color:var(--accent);">→</div>
+      <div style="background:var(--user-bubble); padding:8px 14px; border-radius:var(--radius-card);">创建新 Session</div>
+      <div style="color:var(--accent);">→</div>
+      <div style="background:rgba(166,227,161,0.15); padding:8px 14px; border-radius:var(--radius-card); color:var(--success);">自动选中</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

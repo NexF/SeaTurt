@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SeaTurt 设计稿 — 04 Workspace 侧边栏</title>
+<style>
+  :root {
+    --bg-main: #1e1e2e; --bg-sidebar: #181825; --bg-deepest: #11111b;
+    --text-primary: #cdd6f4; --text-secondary: #6c7086;
+    --accent: #89b4fa; --border: #313244;
+    --user-bubble: #313244; --success: #a6e3a1; --error: #f38ba8;
+    --orange: #fab387; --radius-card: 8px; --radius-btn: 6px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:"Inter",-apple-system,sans-serif; font-size:14px; line-height:1.6; background:#0e0e16; color:var(--text-primary); padding:40px 32px; max-width:1400px; margin:0 auto; }
+  h1 { font-size:28px; font-weight:700; margin-bottom:8px; }
+  h2 { font-size:22px; font-weight:600; margin:48px 0 16px; border-bottom:1px solid var(--border); padding-bottom:8px; }
+  h3 { font-size:17px; font-weight:600; margin:32px 0 12px; color:var(--accent); }
+  p { margin:8px 0; color:var(--text-secondary); }
+  code { font-family:"JetBrains Mono",monospace; font-size:13px; background:var(--bg-deepest); padding:2px 6px; border-radius:4px; color:var(--orange); }
+  .nav-bar { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:32px; padding:12px 0; border-bottom:1px solid var(--border); }
+  .nav-bar a { padding:6px 14px; border-radius:var(--radius-btn); background:var(--user-bubble); color:var(--text-primary); font-size:13px; text-decoration:none; }
+  .nav-bar a:hover { background:var(--accent); color:var(--bg-deepest); }
+  .nav-bar a.active { background:var(--accent); color:var(--bg-deepest); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; }
+  th,td { text-align:left; padding:10px 14px; border:1px solid var(--border); font-size:13px; }
+  th { background:var(--bg-deepest); color:var(--text-primary); font-weight:600; }
+  td { color:var(--text-secondary); }
+  .note-box { background:rgba(137,180,250,0.06); border-left:3px solid var(--accent); padding:12px 16px; border-radius:0 var(--radius-card) var(--radius-card) 0; margin:12px 0; font-size:13px; }
+  .note-box strong { color:var(--text-primary); }
+  .mockup-container { background:var(--bg-deepest); border:1px solid var(--border); border-radius:var(--radius-card); overflow:hidden; margin:20px 0; }
+  .side-by-side { display:flex; gap:24px; flex-wrap:wrap; margin:20px 0; }
+  .side-by-side>div { flex:1; min-width:300px; }
+  .ws-panel { width:320px; background:var(--bg-sidebar); padding:20px 16px; font-size:13px; min-height:500px; }
+  .ws-section-title { font-size:13px; font-weight:600; color:var(--text-secondary); margin-bottom:10px; display:flex; align-items:center; gap:6px; cursor:pointer; }
+  .file-tree-item { display:flex; align-items:center; gap:6px; padding:4px 8px; font-size:12px; color:var(--text-secondary); cursor:pointer; border-radius:4px; transition:background 0.1s; }
+  .file-tree-item:hover { background:rgba(137,180,250,0.06); color:var(--text-primary); }
+  .file-tree-item.folder { color:var(--accent); font-weight:500; }
+  .desktop-preview { width:100%; aspect-ratio:16/9; background:var(--bg-deepest); border:1px solid var(--border); border-radius:var(--radius-card); position:relative; overflow:hidden; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  .desktop-preview .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.4); opacity:0; transition:opacity 0.15s; }
+  .desktop-preview:hover .overlay { opacity:1; }
+  .desktop-preview .overlay span { color:#fff; font-size:13px; }
+  .desktop-offline { width:100%; aspect-ratio:16/9; background:var(--bg-deepest); border:1px solid var(--border); border-radius:var(--radius-card); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--text-secondary); font-size:12px; }
+</style>
+</head>
+<body>
+
+<nav class="nav-bar">
+  <a href="01-layout-overview.html">01 整体布局</a>
+  <a href="02-sidebar.html">02 侧边栏</a>
+  <a href="03-chat-panel.html">03 对话面板</a>
+  <a href="04-workspace.html" class="active">04 Workspace</a>
+  <a href="05-interactions.html">05 交互细节</a>
+  <a href="06-theme-responsive.html">06 主题 &amp; 响应式</a>
+  <a href="07-cron-job.html">07 定时任务</a>
+</nav>
+
+<h1>04 — Workspace 侧边栏（右侧可收起）</h1>
+<p>固定 320px，展示当前 Agent 的 workspace 文件树和桌面实时预览。通过顶栏 📁 按钮可切换显示/隐藏。</p>
+
+<h2>两个区块</h2>
+<table>
+  <thead><tr><th>区块</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td>📁 文件树</td><td>workspace 目录结构，点击可预览文档、表格、图片等文件</td></tr>
+    <tr><td>🖥 桌面</td><td>Selkies WebRTC 实时桌面预览（iframe view-only 模式），点击跳转新标签页打开完整桌面</td></tr>
+  </tbody>
+</table>
+
+<h2>Mockup</h2>
+
+<div class="side-by-side">
+  <!-- Agent 运行中 -->
+  <div>
+    <h3>Agent 运行中</h3>
+    <div class="mockup-container">
+      <div class="ws-panel">
+        <div class="ws-section-title">📁 Workspace</div>
+        <div style="margin-left:4px">
+          <div class="file-tree-item folder">▸ .seaturt/</div>
+          <div class="file-tree-item folder">▾ 周报/</div>
+          <div class="file-tree-item" style="padding-left:24px">📄 2025-W10.md</div>
+          <div class="file-tree-item" style="padding-left:24px">📄 2025-W11.md</div>
+          <div class="file-tree-item folder">▾ 整理/</div>
+          <div class="file-tree-item" style="padding-left:24px">📊 旅行计划.xlsx</div>
+          <div class="file-tree-item" style="padding-left:24px">📝 会议纪要.docx</div>
+          <div class="file-tree-item">📈 数据分析.csv</div>
+          <div class="file-tree-item">🖼 统计图表.png</div>
+        </div>
+
+        <div class="ws-section-title" style="margin-top:24px">🖥 桌面 (实时预览)</div>
+        <div class="desktop-preview">
+          <div style="font-size:11px; color:var(--text-secondary); opacity:0.6; text-align:center;">
+            <div style="font-size:40px; margin-bottom:8px;">🖥</div>
+            KDE 桌面实时流<br>(iframe 1920×1080 缩放)
+          </div>
+          <div class="overlay"><span>点击打开完整桌面 →</span></div>
+        </div>
+        <div style="text-align:right; margin-top:6px; font-size:11px; color:var(--accent); cursor:pointer;">点击打开完整桌面 →</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Agent 未运行 -->
+  <div>
+    <h3>Agent 未运行</h3>
+    <div class="mockup-container">
+      <div class="ws-panel">
+        <div class="ws-section-title">📁 Workspace</div>
+        <div style="padding:20px; text-align:center; color:var(--text-secondary); font-size:12px;">
+          Agent 未运行，无法加载文件树
+        </div>
+
+        <div class="ws-section-title" style="margin-top:24px">🖥 桌面 (实时预览)</div>
+        <div class="desktop-offline">
+          <div style="font-size:32px; opacity:0.3;">🖥</div>
+          <span>Agent 未运行</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>桌面实时预览技术方案（v0.1.1）</h2>
+<table>
+  <thead><tr><th>属性</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>技术</td><td>使用 <code>&lt;iframe&gt;</code> 加载 Selkies WebRTC URL，实时视频流</td></tr>
+    <tr><td>iframe 尺寸</td><td>原始 1920×1080，通过 CSS <code>transform: scale()</code> 缩放到面板宽度</td></tr>
+    <tr><td>外层容器</td><td><code>overflow: hidden</code> 裁剪，实际显示约 280×158px（16:9 比例）</td></tr>
+    <tr><td>交互禁用</td><td>iframe 上覆盖透明遮罩（<code>pointer-events: none</code>），禁止在缩略图上操作</td></tr>
+    <tr><td>点击行为</td><td>点击遮罩 → <code>window.open(desktopUrl, '_blank')</code> 打开完整桌面</td></tr>
+    <tr><td>多连接</td><td>Selkies 支持并发连接，预览 iframe 和新标签页完整桌面互不影响</td></tr>
+    <tr><td>分辨率</td><td>固定 1080p：Selkies 启动参数 <code>--manual-width=1920 --manual-height=1080</code></td></tr>
+  </tbody>
+</table>
+
+<h3>缩放示意</h3>
+<div class="mockup-container" style="padding:24px;">
+  <div style="display:flex; align-items:center; gap:24px; font-size:12px;">
+    <div style="text-align:center;">
+      <div style="width:192px; height:108px; border:2px solid var(--accent); border-radius:4px; display:flex; align-items:center; justify-content:center; color:var(--text-secondary); font-size:10px;">
+        iframe 原始<br>1920×1080
+      </div>
+      <div style="margin-top:6px; color:var(--text-secondary);">原始尺寸</div>
+    </div>
+    <div style="color:var(--accent); font-size:24px;">→</div>
+    <div style="text-align:center;">
+      <div style="width:280px; height:158px; border:2px solid var(--success); border-radius:var(--radius-card); display:flex; align-items:center; justify-content:center; color:var(--text-secondary); font-size:10px; background:var(--bg-deepest); overflow:hidden;">
+        CSS transform: scale()<br>缩放到面板宽度<br>280×158px (16:9)
+      </div>
+      <div style="margin-top:6px; color:var(--text-secondary);">面板显示</div>
+    </div>
+    <div style="color:var(--accent); font-size:24px;">→</div>
+    <div style="text-align:center;">
+      <div style="width:192px; height:108px; border:2px solid var(--orange); border-radius:4px; display:flex; align-items:center; justify-content:center; color:var(--text-secondary); font-size:10px;">
+        window.open()<br>完整桌面 (新标签页)
+      </div>
+      <div style="margin-top:6px; color:var(--text-secondary);">完整桌面</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

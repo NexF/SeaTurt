@@ -7,9 +7,10 @@ import { useChatStore } from "@/stores/chatStore"
 interface Props {
   toolCall: UIToolCall
   agentId: string
+  sessionId: string
 }
 
-export default function ToolCallBlock({ toolCall, agentId }: Props) {
+export default function ToolCallBlock({ toolCall, agentId, sessionId }: Props) {
   // Track whether user has manually toggled; null = no manual override
   const [manualToggle, setManualToggle] = useState<boolean | null>(null)
   const cancelToolCall = useChatStore((s) => s.cancelToolCall)
@@ -95,7 +96,7 @@ export default function ToolCallBlock({ toolCall, agentId }: Props) {
             className="text-xs text-muted-foreground hover:text-foreground transition-colors px-1"
             onClick={(e) => {
               e.stopPropagation()
-              cancelToolCall(agentId, toolCall.id)
+              cancelToolCall(agentId, sessionId, toolCall.id)
             }}
           >
             取消

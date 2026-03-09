@@ -5,12 +5,13 @@ import { useChatStore } from "@/stores/chatStore"
 
 interface Props {
   agentId: string
+  sessionId: string
   disabled: boolean
 }
 
-export default function InputBar({ agentId, disabled }: Props) {
+export default function InputBar({ agentId, sessionId, disabled }: Props) {
   const sendMessage = useChatStore((s) => s.sendMessage)
-  const isStreaming = useChatStore((s) => s.getIsStreaming(agentId))
+  const isStreaming = useChatStore((s) => s.getIsStreaming(sessionId))
   const stopStreaming = useChatStore((s) => s.stopStreaming)
   const [text, setText] = useState("")
   const [images, setImages] = useState<File[]>([])
@@ -23,7 +24,7 @@ export default function InputBar({ agentId, disabled }: Props) {
     if (!trimmed && images.length === 0) return
     if (isStreaming || disabled) return
 
-    sendMessage(agentId, trimmed, images.length > 0 ? images : undefined)
+    sendMessage(agentId, sessionId, trimmed, images.length > 0 ? images : undefined)
     setText("")
     setImages([])
     setPreviews((prev) => {
@@ -32,7 +33,7 @@ export default function InputBar({ agentId, disabled }: Props) {
     })
 
     setTimeout(() => textareaRef.current?.focus(), 0)
-  }, [text, images, isStreaming, disabled, agentId, sendMessage])
+  }, [text, images, isStreaming, disabled, agentId, sessionId, sendMessage])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -151,7 +152,7 @@ export default function InputBar({ agentId, disabled }: Props) {
             variant="destructive"
             size="icon"
             className="h-9 w-9 flex-shrink-0"
-            onClick={() => stopStreaming(agentId)}
+            onClick={() => stopStreaming(agentId, sessionId)}
           >
             <Square className="h-4 w-4" />
           </Button>

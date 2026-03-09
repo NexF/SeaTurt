@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Play, Square, Trash2, Copy, Loader2 } from "lucide-react"
+import { Play, Square, Trash2, Copy, Loader2, ChevronRight, ChevronDown } from "lucide-react"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -44,10 +44,11 @@ const operationLabel: Record<string, string> = {
 interface Props {
   agent: Agent
   selected: boolean
-  onClick: () => void
+  expanded: boolean
+  onToggle: () => void
 }
 
-export default function AgentCard({ agent, selected, onClick }: Props) {
+export default function AgentCard({ agent, selected, expanded, onToggle }: Props) {
   const { startAgent, stopAgent, deleteAgent, operatingAgents } = useAgentStore()
   const [deleteOpen, setDeleteOpen] = useState(false)
 
@@ -83,7 +84,7 @@ export default function AgentCard({ agent, selected, onClick }: Props) {
       <ContextMenu>
         <ContextMenuTrigger>
           <button
-            onClick={onClick}
+            onClick={onToggle}
             disabled={isOperating}
             className={cn(
               "w-full text-left rounded-lg px-3 py-2.5 transition-colors cursor-pointer",
@@ -93,6 +94,11 @@ export default function AgentCard({ agent, selected, onClick }: Props) {
             )}
           >
             <div className="flex items-center gap-2 mb-0.5">
+              {expanded ? (
+                <ChevronDown className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground" />
+              )}
               {isOperating ? (
                 <Loader2 className="w-3 h-3 flex-shrink-0 animate-spin text-muted-foreground" />
               ) : (

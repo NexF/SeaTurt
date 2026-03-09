@@ -29,6 +29,13 @@ type Store interface {
 	CreateMessage(m *Message) error
 	ListMessages(agentID string) ([]*Message, error)
 	DeleteMessages(agentID string) error
+	ListMessagesBySession(sessionID string) ([]*Message, error)
+	DeleteMessagesBySession(sessionID string) error
+	CreateSession(s *Session) error
+	GetSession(id string) (*Session, error)
+	ListSessions(agentID string) ([]*Session, error)
+	UpdateSession(s *Session) error
+	DeleteSession(id string) error
 }
 
 // Manager manages Agent lifecycle: create, start, stop, delete.
@@ -45,11 +52,11 @@ type Manager struct {
 	routers    map[string]ToolRouter        // agent_id -> router (ToolRouter interface)
 
 	// Per-agent active chat session cancel functions.
-	// Key: agentID, Value: context.CancelFunc for the running RunLoop.
+	// Key: sessionID, Value: context.CancelFunc for the running RunLoop.
 	activeSessions map[string]context.CancelFunc
 
 	// Per-agent active tool call cancel functions.
-	// Key: agentID, Value: map[toolCallID]context.CancelFunc
+	// Key: sessionID, Value: map[toolCallID]context.CancelFunc
 	activeToolCalls map[string]map[string]context.CancelFunc
 }
 
@@ -67,62 +74,62 @@ func NewManager(cfg *config.Config, s Store, docker *container.Manager, llmClien
 	}
 }
 
-// SetActiveSession registers the cancel function for an agent's active chat session.
-func (m *Manager) SetActiveSession(agentID string, cancel context.CancelFunc) {
+// SetActiveSession registers the cancel function for a session's active chat.
+func (m *Manager) SetActiveSession(sessionID string, cancel context.CancelFunc) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if existing, ok := m.activeSessions[agentID]; ok {
+	if existing, ok := m.activeSessions[sessionID]; ok {
 		existing()
 	}
-	m.activeSessions[agentID] = cancel
+	m.activeSessions[sessionID] = cancel
 }
 
-// ClearActiveSession removes the cancel function for an agent's active chat session.
-func (m *Manager) ClearActiveSession(agentID string) {
+// ClearActiveSession removes the cancel function for a session's active chat.
+func (m *Manager) ClearActiveSession(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.activeSessions, agentID)
+	delete(m.activeSessions, sessionID)
 }
 
-// CancelActiveSession cancels the active chat session for an agent.
+// CancelActiveSession cancels the active chat for a session.
 // Returns true if there was an active session to cancel.
-func (m *Manager) CancelActiveSession(agentID string) bool {
+func (m *Manager) CancelActiveSession(sessionID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if cancel, ok := m.activeSessions[agentID]; ok {
+	if cancel, ok := m.activeSessions[sessionID]; ok {
 		cancel()
-		delete(m.activeSessions, agentID)
-		delete(m.activeToolCalls, agentID)
+		delete(m.activeSessions, sessionID)
+		delete(m.activeToolCalls, sessionID)
 		return true
 	}
 	return false
 }
 
-// SetActiveToolCall registers a cancel function for a specific tool call.
-func (m *Manager) SetActiveToolCall(agentID, toolCallID string, cancel context.CancelFunc) {
+// SetActiveToolCall registers a cancel function for a specific tool call within a session.
+func (m *Manager) SetActiveToolCall(sessionID, toolCallID string, cancel context.CancelFunc) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.activeToolCalls[agentID] == nil {
-		m.activeToolCalls[agentID] = make(map[string]context.CancelFunc)
+	if m.activeToolCalls[sessionID] == nil {
+		m.activeToolCalls[sessionID] = make(map[string]context.CancelFunc)
 	}
-	m.activeToolCalls[agentID][toolCallID] = cancel
+	m.activeToolCalls[sessionID][toolCallID] = cancel
 }
 
-// ClearActiveToolCall removes the cancel function for a specific tool call.
-func (m *Manager) ClearActiveToolCall(agentID, toolCallID string) {
+// ClearActiveToolCall removes the cancel function for a specific tool call within a session.
+func (m *Manager) ClearActiveToolCall(sessionID, toolCallID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if calls, ok := m.activeToolCalls[agentID]; ok {
+	if calls, ok := m.activeToolCalls[sessionID]; ok {
 		delete(calls, toolCallID)
 	}
 }
 
-// CancelActiveToolCall cancels a specific tool call for an agent.
+// CancelActiveToolCall cancels a specific tool call within a session.
 // Returns true if the tool call was found and cancelled.
-func (m *Manager) CancelActiveToolCall(agentID, toolCallID string) bool {
+func (m *Manager) CancelActiveToolCall(sessionID, toolCallID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if calls, ok := m.activeToolCalls[agentID]; ok {
+	if calls, ok := m.activeToolCalls[sessionID]; ok {
 		if cancel, ok := calls[toolCallID]; ok {
 			cancel()
 			delete(calls, toolCallID)

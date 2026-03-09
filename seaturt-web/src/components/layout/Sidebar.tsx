@@ -3,6 +3,7 @@ import { Plus, Loader2, Moon, Sun } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAgentStore } from "@/stores/agentStore"
 import AgentCard from "@/components/agent/AgentCard"
+import SessionItem from "@/components/agent/SessionItem"
 import CreateAgentDialog from "@/components/agent/CreateAgentDialog"
 
 function useTheme() {
@@ -22,8 +23,12 @@ function useTheme() {
 }
 
 export default function Sidebar() {
-  const { agents, loading, fetchAgents, fetchModels, selectAgent, selectedAgentId } =
-    useAgentStore()
+  const {
+    agents, loading, fetchAgents, fetchModels,
+    selectedAgentId, selectedSessionId,
+    expandedAgentIds, sessions,
+    toggleAgent, selectSession, createSession,
+  } = useAgentStore()
   const [createOpen, setCreateOpen] = useState(false)
   const { dark, toggle } = useTheme()
 
@@ -32,7 +37,6 @@ export default function Sidebar() {
     fetchModels()
   }, [fetchAgents, fetchModels])
 
-  // Poll agents every 5s for status updates
   useEffect(() => {
     const interval = setInterval(fetchAgents, 5000)
     return () => clearInterval(interval)
@@ -56,20 +60,45 @@ export default function Sidebar() {
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 space-y-1">
+      <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
         {loading && agents.length === 0 && (
           <div className="flex justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         )}
-        {agents.map((agent) => (
-          <AgentCard
-            key={agent.id}
-            agent={agent}
-            selected={agent.id === selectedAgentId}
-            onClick={() => selectAgent(agent.id)}
-          />
-        ))}
+        {agents.map((agent) => {
+          const expanded = expandedAgentIds.has(agent.id)
+          const agentSessions = sessions[agent.id] || []
+          return (
+            <div key={agent.id}>
+              <AgentCard
+                agent={agent}
+                selected={agent.id === selectedAgentId}
+                expanded={expanded}
+                onToggle={() => toggleAgent(agent.id)}
+              />
+              {expanded && (
+                <div className="ml-1 space-y-0.5 py-0.5">
+                  {agentSessions.map((sess) => (
+                    <SessionItem
+                      key={sess.id}
+                      session={sess}
+                      selected={sess.id === selectedSessionId}
+                      onClick={() => selectSession(agent.id, sess.id)}
+                    />
+                  ))}
+                  <button
+                    onClick={() => createSession(agent.id)}
+                    className="flex items-center gap-2 pl-7 pr-2 py-1.5 rounded-md cursor-pointer text-sm text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors w-full"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>新对话</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )
+        })}
         {!loading && agents.length === 0 && (
           <p className="text-center text-sm text-muted-foreground py-8">
             还没有 Agent，点击上方创建

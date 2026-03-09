@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SeaTurt 设计稿 — 05 交互细节</title>
+<style>
+  :root {
+    --bg-main: #1e1e2e; --bg-sidebar: #181825; --bg-deepest: #11111b;
+    --text-primary: #cdd6f4; --text-secondary: #6c7086;
+    --accent: #89b4fa; --border: #313244;
+    --user-bubble: #313244; --success: #a6e3a1; --error: #f38ba8;
+    --warning: #f9e2af; --orange: #fab387;
+    --radius-card: 8px; --radius-btn: 6px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:"Inter",-apple-system,sans-serif; font-size:14px; line-height:1.6; background:#0e0e16; color:var(--text-primary); padding:40px 32px; max-width:1400px; margin:0 auto; }
+  h1 { font-size:28px; font-weight:700; margin-bottom:8px; }
+  h2 { font-size:22px; font-weight:600; margin:48px 0 16px; border-bottom:1px solid var(--border); padding-bottom:8px; }
+  h3 { font-size:17px; font-weight:600; margin:32px 0 12px; color:var(--accent); }
+  p { margin:8px 0; color:var(--text-secondary); }
+  code { font-family:"JetBrains Mono",monospace; font-size:13px; background:var(--bg-deepest); padding:2px 6px; border-radius:4px; color:var(--orange); }
+  .nav-bar { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:32px; padding:12px 0; border-bottom:1px solid var(--border); }
+  .nav-bar a { padding:6px 14px; border-radius:var(--radius-btn); background:var(--user-bubble); color:var(--text-primary); font-size:13px; text-decoration:none; }
+  .nav-bar a:hover { background:var(--accent); color:var(--bg-deepest); }
+  .nav-bar a.active { background:var(--accent); color:var(--bg-deepest); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; }
+  th,td { text-align:left; padding:10px 14px; border:1px solid var(--border); font-size:13px; }
+  th { background:var(--bg-deepest); color:var(--text-primary); font-weight:600; }
+  td { color:var(--text-secondary); }
+  .note-box { background:rgba(137,180,250,0.06); border-left:3px solid var(--accent); padding:12px 16px; border-radius:0 var(--radius-card) var(--radius-card) 0; margin:12px 0; font-size:13px; }
+  .note-box strong { color:var(--text-primary); }
+  .mockup-container { background:var(--bg-deepest); border:1px solid var(--border); border-radius:var(--radius-card); overflow:hidden; margin:20px 0; }
+  .side-by-side { display:flex; gap:24px; flex-wrap:wrap; margin:20px 0; }
+  .side-by-side>div { flex:1; min-width:300px; }
+
+  /* Dialog */
+  .dialog-overlay {
+    background:rgba(0,0,0,0.5); padding:40px; display:flex; align-items:center; justify-content:center;
+  }
+  .dialog {
+    background:var(--bg-main); border:1px solid var(--border); border-radius:12px;
+    width:420px; padding:28px; box-shadow:0 16px 48px rgba(0,0,0,0.5);
+  }
+  .dialog-title { font-size:18px; font-weight:700; margin-bottom:24px; }
+  .form-group { margin-bottom:18px; }
+  .form-label { display:block; font-size:13px; color:var(--text-secondary); margin-bottom:6px; font-weight:500; }
+  .form-input {
+    width:100%; padding:10px 14px; background:var(--bg-deepest); border:1px solid var(--border);
+    border-radius:var(--radius-btn); color:var(--text-primary); font-size:14px; outline:none;
+    font-family:inherit;
+  }
+  .form-input:focus { border-color:var(--accent); }
+  .form-select {
+    width:100%; padding:10px 14px; background:var(--bg-deepest); border:1px solid var(--border);
+    border-radius:var(--radius-btn); color:var(--text-primary); font-size:14px; outline:none;
+    appearance:none; cursor:pointer;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%236c7086' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:right 12px center;
+  }
+  .dialog-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:24px; }
+  .btn { padding:8px 20px; border-radius:var(--radius-btn); font-size:13px; font-weight:600; cursor:pointer; border:none; transition:opacity 0.15s; }
+  .btn-cancel { background:var(--user-bubble); color:var(--text-primary); }
+  .btn-cancel:hover { opacity:0.8; }
+  .btn-primary { background:var(--accent); color:var(--bg-deepest); }
+  .btn-primary:hover { opacity:0.85; }
+  .btn-danger { background:var(--error); color:#fff; }
+
+  /* Confirm dialog */
+  .confirm-dialog { width:360px; text-align:center; }
+  .confirm-dialog .icon { font-size:40px; margin-bottom:12px; }
+  .confirm-dialog .msg { font-size:14px; color:var(--text-secondary); margin-bottom:20px; }
+
+  /* 流程图 */
+  .flow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:13px; margin:12px 0; }
+  .flow .step { background:var(--user-bubble); padding:8px 14px; border-radius:var(--radius-card); }
+  .flow .arrow { color:var(--accent); }
+  .flow .step.highlight { background:rgba(137,180,250,0.15); color:var(--accent); border:1px solid rgba(137,180,250,0.3); }
+  .flow .step.success { background:rgba(166,227,161,0.15); color:var(--success); }
+  .flow .step.error { background:rgba(243,139,168,0.15); color:var(--error); }
+</style>
+</head>
+<body>
+
+<nav class="nav-bar">
+  <a href="01-layout-overview.html">01 整体布局</a>
+  <a href="02-sidebar.html">02 侧边栏</a>
+  <a href="03-chat-panel.html">03 对话面板</a>
+  <a href="04-workspace.html">04 Workspace</a>
+  <a href="05-interactions.html" class="active">05 交互细节</a>
+  <a href="06-theme-responsive.html">06 主题 &amp; 响应式</a>
+  <a href="07-cron-job.html">07 定时任务</a>
+</nav>
+
+<h1>05 — 交互细节</h1>
+<p>对话框、菜单、图片处理、Session 标题自动生成等交互行为。</p>
+
+<!-- ===== 创建 Agent 对话框 ===== -->
+<h2>创建 Agent 对话框</h2>
+
+<div class="mockup-container">
+  <div class="dialog-overlay">
+    <div class="dialog">
+      <div class="dialog-title">新建 Agent</div>
+      <div class="form-group">
+        <label class="form-label">名称</label>
+        <input class="form-input" placeholder="我的日常助手" value="我的日常助手" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">模型</label>
+        <select class="form-select">
+          <option>GPT-4o</option>
+          <option>GPT-4o-mini</option>
+          <option>Claude 3.5 Sonnet</option>
+        </select>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-cancel">取消</button>
+        <button class="btn btn-primary">创建</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h3>字段说明</h3>
+<table>
+  <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>名称</td><td>文本输入</td><td>是</td><td>允许任意字符，作为 Agent 展示名称；后端自动生成唯一 <code>agent_id</code></td></tr>
+    <tr><td>模型</td><td>下拉选择</td><td>是</td><td>下拉列表显示模型名称，内部传递 <code>model_id</code>，可选项从后端配置获取</td></tr>
+    <tr><td><s>启用桌面环境</s></td><td><s>开关</s></td><td>—</td><td>已移除：所有 Agent 统一使用内置桌面环境</td></tr>
+  </tbody>
+</table>
+
+<h3>交互流程</h3>
+<div class="flow">
+  <div class="step">1. 点击"+ 新建 Agent"</div>
+  <span class="arrow">→</span>
+  <div class="step">2. 弹出 Dialog</div>
+  <span class="arrow">→</span>
+  <div class="step">3. 填写表单</div>
+  <span class="arrow">→</span>
+  <div class="step highlight">4. 点击"创建"</div>
+  <span class="arrow">→</span>
+  <div class="step">POST /api/agents</div>
+</div>
+<div class="flow">
+  <div class="step" style="margin-left:40px;">↓ 成功</div>
+  <span class="arrow">→</span>
+  <div class="step success">关闭 Dialog，Agent 出现在列表中</div>
+</div>
+<div class="flow">
+  <div class="step" style="margin-left:40px;">↓ 失败</div>
+  <span class="arrow">→</span>
+  <div class="step error">显示错误提示，表单不关闭</div>
+</div>
+
+<!-- ===== 删除确认 ===== -->
+<h2>删除确认对话框</h2>
+
+<div class="side-by-side">
+  <div>
+    <h3>删除 Agent</h3>
+    <div class="mockup-container">
+      <div class="dialog-overlay">
+        <div class="dialog confirm-dialog">
+          <div class="icon">⚠️</div>
+          <div class="dialog-title" style="font-size:16px;">确认删除</div>
+          <div class="msg">确定要删除 Agent <strong style="color:var(--text-primary);">"coder"</strong> 吗？<br>此操作将同时删除所有关联的 Session 和消息历史。</div>
+          <div class="dialog-actions" style="justify-content:center;">
+            <button class="btn btn-cancel">取消</button>
+            <button class="btn btn-danger">删除</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div>
+    <h3>删除 Session</h3>
+    <div class="mockup-container">
+      <div class="dialog-overlay">
+        <div class="dialog confirm-dialog">
+          <div class="icon">🗑</div>
+          <div class="dialog-title" style="font-size:16px;">删除对话</div>
+          <div class="msg">确定要删除对话 <strong style="color:var(--text-primary);">"代码审查"</strong> 吗？<br>消息历史将被永久删除。</div>
+          <div class="dialog-actions" style="justify-content:center;">
+            <button class="btn btn-cancel">取消</button>
+            <button class="btn btn-danger">删除</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 图片消息 ===== -->
+<h2>图片消息</h2>
+
+<table>
+  <thead><tr><th>场景</th><th>行为</th></tr></thead>
+  <tbody>
+    <tr><td><strong>用户发送的图片</strong></td><td>消息气泡内 inline 显示缩略图（最大 300px 宽），点击弹出 Lightbox 查看原图，多张图片网格排列</td></tr>
+    <tr><td><strong>Tool 返回的图片</strong></td><td>在 Tool 结果区域内渲染，同样支持点击放大</td></tr>
+  </tbody>
+</table>
+
+<h3>上传方式</h3>
+<table>
+  <thead><tr><th>方式</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>拖拽</td><td>拖拽文件到输入区域</td></tr>
+    <tr><td>粘贴</td><td>Ctrl/Cmd + V</td></tr>
+    <tr><td>按钮</td><td>点击 📎 按钮选择文件</td></tr>
+  </tbody>
+</table>
+
+<div class="note-box">
+  <strong>上传预览：</strong>选择图片后在输入栏上方显示缩略图预览，可单独删除某张图片。发送时与文字一起 multipart 提交。
+</div>
+
+<!-- ===== Session 标题自动生成 ===== -->
+<h2>Session 标题自动生成</h2>
+
+<div class="flow">
+  <div class="step">新建 Session</div>
+  <span class="arrow">→</span>
+  <div class="step">默认标题："新对话"</div>
+  <span class="arrow">→</span>
+  <div class="step highlight">用户发送第一条消息</div>
+  <span class="arrow">→</span>
+  <div class="step success">自动截取前 20 字符作为标题</div>
+</div>
+<div class="flow" style="margin-top:8px;">
+  <div class="step" style="margin-left:40px;">调用</div>
+  <span class="arrow">→</span>
+  <div class="step"><code>PUT /api/agents/:id/sessions/:sid</code></div>
+  <span class="arrow">→</span>
+  <div class="step">更新标题</div>
+</div>
+
+<div class="note-box">
+  用户也可以在顶栏手动点击 Session 标题进行 inline 编辑重命名。
+</div>
+
+<!-- ===== API 变更 ===== -->
+<h2>Session API 变更（v0.2.0）</h2>
+
+<h3>新增 Session API</h3>
+<table>
+  <thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>GET</code></td><td><code>/api/agents/:id/sessions</code></td><td>获取 Agent 下所有 Session 列表（按 updated_at 降序）</td></tr>
+    <tr><td><code>POST</code></td><td><code>/api/agents/:id/sessions</code></td><td>新建 Session（可选 title，默认"新对话"）</td></tr>
+    <tr><td><code>PUT</code></td><td><code>/api/agents/:id/sessions/:sid</code></td><td>更新 Session（重命名 title）</td></tr>
+    <tr><td><code>DELETE</code></td><td><code>/api/agents/:id/sessions/:sid</code></td><td>删除 Session（同时删除关联消息）</td></tr>
+  </tbody>
+</table>
+
+<h3>路由变更</h3>
+<table>
+  <thead><tr><th>之前</th><th>之后</th></tr></thead>
+  <tbody>
+    <tr><td><code>POST /api/agents/:id/chat</code></td><td><code>POST /api/agents/:id/sessions/:sid/chat</code></td></tr>
+    <tr><td><code>GET /api/agents/:id/history</code></td><td><code>GET /api/agents/:id/sessions/:sid/history</code></td></tr>
+    <tr><td><code>DELETE /api/agents/:id/history</code></td><td><code>DELETE /api/agents/:id/sessions/:sid/history</code></td></tr>
+    <tr><td><code>POST /api/agents/:id/chat/cancel</code></td><td><code>POST /api/agents/:id/sessions/:sid/chat/cancel</code></td></tr>
+    <tr><td><code>POST .../cancel-tool/:toolCallId</code></td><td><code>POST .../sessions/:sid/chat/cancel-tool/:toolCallId</code></td></tr>
+  </tbody>
+</table>
+
+<div class="note-box">
+  <strong>不变的 API</strong>（Agent 级别，与 Session 无关）：<br>
+  <code>POST/GET/DELETE /api/agents</code> — Agent CRUD<br>
+  <code>POST /api/agents/:id/start|stop</code> — 启停<br>
+  <code>GET /api/agents/:id/desktop|ports|files</code> — 容器相关<br>
+  <code>GET|PUT /api/agents/:id/system-prompt</code> — 系统提示词
+</div>
+
+</body>
+</html>

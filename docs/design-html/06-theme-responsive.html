@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SeaTurt 设计稿 — 06 主题 &amp; 响应式</title>
+<style>
+  :root {
+    --bg-main: #1e1e2e; --bg-sidebar: #181825; --bg-deepest: #11111b;
+    --text-primary: #cdd6f4; --text-secondary: #6c7086;
+    --accent: #89b4fa; --border: #313244;
+    --user-bubble: #313244; --success: #a6e3a1; --error: #f38ba8;
+    --warning: #f9e2af; --orange: #fab387;
+    --radius-card: 8px; --radius-btn: 6px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:"Inter",-apple-system,sans-serif; font-size:14px; line-height:1.6; background:#0e0e16; color:var(--text-primary); padding:40px 32px; max-width:1400px; margin:0 auto; }
+  h1 { font-size:28px; font-weight:700; margin-bottom:8px; }
+  h2 { font-size:22px; font-weight:600; margin:48px 0 16px; border-bottom:1px solid var(--border); padding-bottom:8px; }
+  h3 { font-size:17px; font-weight:600; margin:32px 0 12px; color:var(--accent); }
+  p { margin:8px 0; color:var(--text-secondary); }
+  code { font-family:"JetBrains Mono",monospace; font-size:13px; background:var(--bg-deepest); padding:2px 6px; border-radius:4px; color:var(--orange); }
+  .nav-bar { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:32px; padding:12px 0; border-bottom:1px solid var(--border); }
+  .nav-bar a { padding:6px 14px; border-radius:var(--radius-btn); background:var(--user-bubble); color:var(--text-primary); font-size:13px; text-decoration:none; }
+  .nav-bar a:hover { background:var(--accent); color:var(--bg-deepest); }
+  .nav-bar a.active { background:var(--accent); color:var(--bg-deepest); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; }
+  th,td { text-align:left; padding:10px 14px; border:1px solid var(--border); font-size:13px; }
+  th { background:var(--bg-deepest); color:var(--text-primary); font-weight:600; }
+  td { color:var(--text-secondary); }
+  .note-box { background:rgba(137,180,250,0.06); border-left:3px solid var(--accent); padding:12px 16px; border-radius:0 var(--radius-card) var(--radius-card) 0; margin:12px 0; font-size:13px; }
+  .note-box strong { color:var(--text-primary); }
+  .mockup-container { background:var(--bg-deepest); border:1px solid var(--border); border-radius:var(--radius-card); overflow:hidden; margin:20px 0; }
+  .side-by-side { display:flex; gap:24px; flex-wrap:wrap; margin:20px 0; }
+  .side-by-side>div { flex:1; min-width:300px; }
+
+  /* 色板 */
+  .color-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:12px; margin:16px 0; }
+  .color-swatch {
+    display:flex; align-items:center; gap:12px; padding:10px 14px;
+    background:var(--bg-deepest); border:1px solid var(--border); border-radius:var(--radius-card);
+  }
+  .color-swatch .swatch {
+    width:36px; height:36px; border-radius:6px; flex-shrink:0;
+    border:1px solid rgba(255,255,255,0.1);
+  }
+  .color-swatch .info { font-size:12px; }
+  .color-swatch .info .name { color:var(--text-primary); font-weight:600; }
+  .color-swatch .info .hex { color:var(--text-secondary); font-family:"JetBrains Mono",monospace; }
+
+  /* 响应式 mockup */
+  .responsive-demo { display:flex; align-items:flex-end; gap:20px; justify-content:center; padding:24px; flex-wrap:wrap; }
+  .device { background:var(--bg-sidebar); border:2px solid var(--border); border-radius:8px; overflow:hidden; font-size:10px; }
+  .device .bar { background:var(--bg-deepest); padding:4px 8px; font-size:9px; color:var(--text-secondary); text-align:center; border-bottom:1px solid var(--border); }
+  .device .content { display:flex; }
+  .device .d-sidebar { background:var(--bg-deepest); }
+  .device .d-main { background:var(--bg-main); display:flex; align-items:center; justify-content:center; color:var(--text-secondary); }
+  .device .d-right { background:var(--bg-deepest); }
+  .device-label { text-align:center; font-size:11px; color:var(--text-secondary); margin-top:6px; }
+
+  /* 动效展示 */
+  .anim-demo { display:inline-flex; align-items:center; gap:8px; padding:8px 16px; background:var(--bg-deepest); border:1px solid var(--border); border-radius:var(--radius-card); }
+  .spinner-demo { width:16px; height:16px; border:2px solid var(--border); border-top-color:var(--orange); border-radius:50%; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @keyframes fadeSlideUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes scaleIn { from { opacity:0; transform:scale(0.95); } to { opacity:1; transform:scale(1); } }
+  .fade-slide-demo { animation:fadeSlideUp 0.3s ease both; }
+  .scale-in-demo { animation:scaleIn 0.3s ease both; }
+</style>
+</head>
+<body>
+
+<nav class="nav-bar">
+  <a href="01-layout-overview.html">01 整体布局</a>
+  <a href="02-sidebar.html">02 侧边栏</a>
+  <a href="03-chat-panel.html">03 对话面板</a>
+  <a href="04-workspace.html">04 Workspace</a>
+  <a href="05-interactions.html">05 交互细节</a>
+  <a href="06-theme-responsive.html" class="active">06 主题 &amp; 响应式</a>
+  <a href="07-cron-job.html">07 定时任务</a>
+</nav>
+
+<h1>06 — 主题、响应式、动效 &amp; 字体间距</h1>
+<p>Catppuccin Mocha 色彩体系、响应式断点规则、动效规范和排版参数。</p>
+
+<!-- ===== 深色主题 ===== -->
+<h2>深色主题（默认）</h2>
+<p>对标 ChatGPT / Claude 的现代暗色调，使用 Catppuccin Mocha 色板。</p>
+
+<div class="color-grid">
+  <div class="color-swatch">
+    <div class="swatch" style="background:#1e1e2e;"></div>
+    <div class="info"><div class="name">背景（主区域）</div><div class="hex">#1e1e2e</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#181825;"></div>
+    <div class="info"><div class="name">背景（侧边栏）</div><div class="hex">#181825</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#11111b;"></div>
+    <div class="info"><div class="name">背景（最深层）</div><div class="hex">#11111b</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#cdd6f4;"></div>
+    <div class="info"><div class="name">文字（主要）</div><div class="hex">#cdd6f4</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#6c7086;"></div>
+    <div class="info"><div class="name">文字（次要）</div><div class="hex">#6c7086</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#89b4fa;"></div>
+    <div class="info"><div class="name">强调色</div><div class="hex">#89b4fa</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#313244;"></div>
+    <div class="info"><div class="name">用户消息气泡</div><div class="hex">#313244</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#a6e3a1;"></div>
+    <div class="info"><div class="name">成功</div><div class="hex">#a6e3a1</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#f9e2af;"></div>
+    <div class="info"><div class="name">警告</div><div class="hex">#f9e2af</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#f38ba8;"></div>
+    <div class="info"><div class="name">错误</div><div class="hex">#f38ba8</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#fab387;"></div>
+    <div class="info"><div class="name">Tool 执行中色条</div><div class="hex">#fab387</div></div>
+  </div>
+  <div class="color-swatch">
+    <div class="swatch" style="background:#313244;"></div>
+    <div class="info"><div class="name">边框</div><div class="hex">#313244</div></div>
+  </div>
+</div>
+
+<h3>Tool 卡片左色条</h3>
+<div style="display:flex; gap:16px; margin:12px 0; flex-wrap:wrap;">
+  <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
+    <div style="width:4px; height:32px; background:#fab387; border-radius:2px;"></div>
+    <span>执行中 <code>#fab387</code></span>
+  </div>
+  <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
+    <div style="width:4px; height:32px; background:#a6e3a1; border-radius:2px;"></div>
+    <span>成功 <code>#a6e3a1</code></span>
+  </div>
+  <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
+    <div style="width:4px; height:32px; background:#f38ba8; border-radius:2px;"></div>
+    <span>失败 <code>#f38ba8</code></span>
+  </div>
+  <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
+    <div style="width:4px; height:32px; background:#6c7086; border-radius:2px;"></div>
+    <span>已取消 <code>#6c7086</code></span>
+  </div>
+</div>
+
+<!-- ===== 浅色主题 ===== -->
+<h2>浅色主题</h2>
+
+<div class="color-grid">
+  <div class="color-swatch" style="background:#dce0e8; border-color:#ccd0da;">
+    <div class="swatch" style="background:#eff1f5;"></div>
+    <div class="info"><div class="name" style="color:#4c4f69;">背景（主区域）</div><div class="hex" style="color:#6c6f85;">#eff1f5</div></div>
+  </div>
+  <div class="color-swatch" style="background:#dce0e8; border-color:#ccd0da;">
+    <div class="swatch" style="background:#e6e9ef;"></div>
+    <div class="info"><div class="name" style="color:#4c4f69;">背景（侧边栏）</div><div class="hex" style="color:#6c6f85;">#e6e9ef</div></div>
+  </div>
+  <div class="color-swatch" style="background:#dce0e8; border-color:#ccd0da;">
+    <div class="swatch" style="background:#4c4f69;"></div>
+    <div class="info"><div class="name" style="color:#4c4f69;">文字（主要）</div><div class="hex" style="color:#6c6f85;">#4c4f69</div></div>
+  </div>
+  <div class="color-swatch" style="background:#dce0e8; border-color:#ccd0da;">
+    <div class="swatch" style="background:#1e66f5;"></div>
+    <div class="info"><div class="name" style="color:#4c4f69;">强调色</div><div class="hex" style="color:#6c6f85;">#1e66f5</div></div>
+  </div>
+  <div class="color-swatch" style="background:#dce0e8; border-color:#ccd0da;">
+    <div class="swatch" style="background:#dce0e8;"></div>
+    <div class="info"><div class="name" style="color:#4c4f69;">用户消息气泡</div><div class="hex" style="color:#6c6f85;">#dce0e8</div></div>
+  </div>
+</div>
+
+<h3>切换方式</h3>
+<div class="note-box">
+  • 侧边栏底部放置主题切换按钮（🌙/☀️）<br>
+  • 通过 Tailwind CSS <code>dark:</code> 前缀实现<br>
+  • 默认跟随系统偏好（<code>prefers-color-scheme</code>）<br>
+  • 用户手动切换后存 <code>localStorage</code>
+</div>
+
+<!-- ===== 响应式 ===== -->
+<h2>响应式设计</h2>
+
+<table>
+  <thead><tr><th>断点</th><th>屏幕宽度</th><th>布局</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>Desktop</td><td>≥ 1200px</td><td>三栏</td><td>左侧栏 + 对话 + 右侧栏全部展开</td></tr>
+    <tr><td>Tablet</td><td>768~1199px</td><td>两栏</td><td>左侧栏 + 对话，右侧栏为浮层</td></tr>
+    <tr><td>Mobile</td><td>&lt; 768px</td><td>单栏</td><td>所有侧边栏为抽屉式</td></tr>
+  </tbody>
+</table>
+
+<h3>设备示意</h3>
+<div class="mockup-container">
+  <div class="responsive-demo">
+    <!-- Desktop -->
+    <div>
+      <div class="device" style="width:400px;">
+        <div class="bar">Desktop ≥ 1200px</div>
+        <div class="content" style="height:200px;">
+          <div class="d-sidebar" style="width:80px; display:flex; align-items:center; justify-content:center;"><span style="writing-mode:vertical-rl; font-size:10px; color:var(--text-secondary);">Sidebar 240px</span></div>
+          <div class="d-main" style="flex:1;">对话区域</div>
+          <div class="d-right" style="width:100px; display:flex; align-items:center; justify-content:center;"><span style="writing-mode:vertical-rl; font-size:10px; color:var(--text-secondary);">Workspace 320px</span></div>
+        </div>
+      </div>
+      <div class="device-label">三栏全展开</div>
+    </div>
+
+    <!-- Tablet -->
+    <div>
+      <div class="device" style="width:260px;">
+        <div class="bar">Tablet 768~1199px</div>
+        <div class="content" style="height:180px;">
+          <div class="d-sidebar" style="width:60px; display:flex; align-items:center; justify-content:center;"><span style="writing-mode:vertical-rl; font-size:9px; color:var(--text-secondary);">240px</span></div>
+          <div class="d-main" style="flex:1; position:relative;">
+            对话区域
+            <div style="position:absolute; right:0; top:0; bottom:0; width:40px; background:rgba(137,180,250,0.1); display:flex; align-items:center; justify-content:center; font-size:9px; color:var(--accent);">浮层</div>
+          </div>
+        </div>
+      </div>
+      <div class="device-label">右侧栏浮层</div>
+    </div>
+
+    <!-- Mobile -->
+    <div>
+      <div class="device" style="width:140px;">
+        <div class="bar">Mobile &lt;768px</div>
+        <div class="content" style="height:160px;">
+          <div class="d-main" style="flex:1; flex-direction:column;">
+            <div style="font-size:9px; padding:4px; border-bottom:1px solid var(--border); text-align:center;">☰ Agent 名称</div>
+            <div style="flex:1; display:flex; align-items:center; justify-content:center;">对话</div>
+            <div style="font-size:9px; padding:4px; border-top:1px solid var(--border); text-align:center;">输入栏</div>
+          </div>
+        </div>
+      </div>
+      <div class="device-label">抽屉式侧边栏</div>
+    </div>
+  </div>
+</div>
+
+<h3>各断点行为</h3>
+<table>
+  <thead><tr><th>断点</th><th>左侧栏</th><th>右侧栏</th><th>其他</th></tr></thead>
+  <tbody>
+    <tr><td>Desktop ≥ 1200px</td><td>固定显示 240px</td><td>默认显示 320px，可手动收起</td><td>对话区域自适应</td></tr>
+    <tr><td>Tablet 768~1199px</td><td>固定显示 240px（可缩为图标模式 60px）</td><td>默认隐藏，点击 📁 从右侧滑出浮层 + 遮罩</td><td>—</td></tr>
+    <tr><td>Mobile &lt; 768px</td><td>默认隐藏，点击 ☰ 从左滑出</td><td>默认隐藏，点击 📁 从底部上滑</td><td>输入栏固定底部，顶栏仅显示 Agent 名称</td></tr>
+  </tbody>
+</table>
+
+<!-- ===== 动效 ===== -->
+<h2>动效规范</h2>
+
+<table>
+  <thead><tr><th>场景</th><th>动效</th><th>时长</th><th>预览</th></tr></thead>
+  <tbody>
+    <tr><td>侧边栏展开/收起</td><td>slide + fade</td><td>200ms</td><td>—</td></tr>
+    <tr><td>Dialog 弹出</td><td>scale(0.95→1) + fade</td><td>150ms</td><td><div class="anim-demo scale-in-demo" style="font-size:11px;">Dialog</div></td></tr>
+    <tr><td>Tool 卡片结果展开</td><td>height 过渡</td><td>200ms</td><td>—</td></tr>
+    <tr><td>消息出现</td><td>fade-in + slide-up</td><td>100ms</td><td><div class="anim-demo fade-slide-demo" style="font-size:11px;">消息</div></td></tr>
+    <tr><td>右键菜单</td><td>scale(0.9→1) + fade</td><td>100ms</td><td>—</td></tr>
+    <tr><td>SSE 打字效果</td><td>无动效，直接追加文字</td><td>—</td><td>—</td></tr>
+    <tr><td>Loading spinner</td><td>rotate 360°</td><td>1s loop</td><td><div class="spinner-demo"></div></td></tr>
+  </tbody>
+</table>
+
+<!-- ===== 间距与字体 ===== -->
+<h2>间距与字体</h2>
+
+<table>
+  <thead><tr><th>属性</th><th>值</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>基准字号</td><td>14px</td><td>正文、消息内容</td></tr>
+    <tr><td>代码字号</td><td>13px</td><td>代码块、Tool 参数</td></tr>
+    <tr><td>行高</td><td>1.6</td><td>正文</td></tr>
+    <tr><td>代码行高</td><td>1.5</td><td>代码块</td></tr>
+    <tr><td>消息气泡圆角</td><td>12px</td><td>用户消息右下角 4px</td></tr>
+    <tr><td>Tool 卡片圆角</td><td>8px</td><td>—</td></tr>
+    <tr><td>按钮圆角</td><td>6px</td><td>—</td></tr>
+    <tr><td>对话区域内边距</td><td>16px ~ 24px</td><td>—</td></tr>
+    <tr><td>消息间距</td><td>12px</td><td>—</td></tr>
+    <tr><td>代码字体</td><td><code>JetBrains Mono, Fira Code, monospace</code></td><td>—</td></tr>
+    <tr><td>正文字体</td><td><code>Inter, -apple-system, sans-serif</code></td><td>—</td></tr>
+  </tbody>
+</table>
+
+<h3>CSS 变量体系</h3>
+<div class="note-box">
+  项目使用 HSL CSS 变量实现主题切换：<br>
+  <code>--background: 240 21% 15%</code> → <code>hsl(var(--background))</code><br>
+  Tailwind 配置通过 <code>hsl(var(--xxx))</code> 引用，通过 <code>.dark</code> class 切换暗色/浅色。
+</div>
+
+</body>
+</html>
