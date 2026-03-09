@@ -19,6 +19,13 @@ type ToolRouter interface {
 	Route(ctx context.Context, toolName string, args map[string]any) (*mcp.CallToolResult, error)
 }
 
+// contextKey is a private type for context keys in agent package.
+type contextKey string
+
+// AgentIDContextKey is the context key for injecting agentID into tool handlers.
+// Used by builtin tools to determine which agent they're operating on.
+const AgentIDContextKey contextKey = "agent_id"
+
 const (
 	// MaxToolOutputLen is the maximum character length for a single tool output.
 	// Outputs exceeding this limit will be truncated to prevent blowing up LLM context.
@@ -92,6 +99,52 @@ type ToolResultEvent struct {
 
 // StreamFunc is called for each event during the agent loop.
 type StreamFunc func(event StreamEvent)
+
+// CompositeRouter merges multiple ToolRouters (e.g. container MCP + builtin).
+// Tool names from each router must be globally unique (enforced by prefix convention).
+type CompositeRouter struct {
+	routers []ToolRouter
+}
+
+// NewCompositeRouter creates a CompositeRouter from one or more ToolRouters.
+func NewCompositeRouter(routers ...ToolRouter) *CompositeRouter {
+	var filtered []ToolRouter
+	for _, r := range routers {
+		if r != nil {
+			filtered = append(filtered, r)
+		}
+	}
+	return &CompositeRouter{routers: filtered}
+}
+
+// AllTools returns the merged tool definitions from all routers.
+func (c *CompositeRouter) AllTools() []mcp.ToolDefinition {
+	var all []mcp.ToolDefinition
+	for _, r := range c.routers {
+		all = append(all, r.AllTools()...)
+	}
+	return all
+}
+
+// Route dispatches a tool call to the first router that can handle it.
+// It tries each router in order; if the first returns "unknown" it falls through.
+func (c *CompositeRouter) Route(ctx context.Context, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
+	// Determine which router handles this tool by checking prefix
+	for _, r := range c.routers {
+		for _, t := range r.AllTools() {
+			if t.Name == toolName {
+				return r.Route(ctx, toolName, args)
+			}
+		}
+	}
+	return nil, fmt.Errorf("no router found for tool: %s", toolName)
+}
+
+// RunLoopNonStream is a simplified, non-streaming version of RunLoop for cron/programmatic execution.
+// It runs the Agent Loop synchronously and returns the final response text.
+func RunLoopNonStream(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage) (string, []llm.ChatMessage, error) {
+	return RunLoop(ctx, cfg, history, nil)
+}
 
 // RunLoop executes the Agent Loop:
 //  1. Collects all tools from the MCP Router

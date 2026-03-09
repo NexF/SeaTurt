@@ -169,7 +169,9 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 	}
 
 	// Create a cancellable context derived from the HTTP request context.
+	// Inject agentID for builtin tools.
 	ctx, cancel := context.WithCancel(c.Request.Context())
+	ctx = context.WithValue(ctx, agent.AgentIDContextKey, id)
 	defer cancel()
 	defer h.mgr.ClearActiveSession(sessionID)
 

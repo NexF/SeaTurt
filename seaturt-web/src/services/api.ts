@@ -1,4 +1,4 @@
-import { Agent, ModelsResponse, Message, Session, FileEntry, DesktopInfo, ContentBlock } from "@/types"
+import { Agent, ModelsResponse, Message, Session, FileEntry, DesktopInfo, ContentBlock, CronJob, CronJobExecution } from "@/types"
 
 const BASE = "/api"
 
@@ -185,4 +185,56 @@ export function getFileUrl(agentId: string, filepath: string): string {
 // Desktop
 export async function getDesktop(agentId: string): Promise<DesktopInfo> {
   return request<DesktopInfo>(`/agents/${agentId}/desktop`)
+}
+
+// CronJobs (v0.3.0)
+export async function listCronJobs(agentId: string): Promise<{ cron_jobs: CronJob[] }> {
+  return request<{ cron_jobs: CronJob[] }>(`/agents/${agentId}/cron-jobs`)
+}
+
+export async function createCronJob(agentId: string, body: {
+  type: "cron" | "at"
+  cron_expr?: string
+  run_at?: string
+  prompt: string
+  session_strategy?: string
+  session_id?: string
+}): Promise<CronJob> {
+  return request<CronJob>(`/agents/${agentId}/cron-jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function getCronJob(agentId: string, jobId: string): Promise<CronJob> {
+  return request<CronJob>(`/agents/${agentId}/cron-jobs/${jobId}`)
+}
+
+export async function updateCronJob(agentId: string, jobId: string, body: {
+  type?: string
+  cron_expr?: string
+  run_at?: string
+  prompt?: string
+  session_strategy?: string
+  session_id?: string
+  enabled?: boolean
+}): Promise<CronJob> {
+  return request<CronJob>(`/agents/${agentId}/cron-jobs/${jobId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteCronJob(agentId: string, jobId: string): Promise<void> {
+  await request(`/agents/${agentId}/cron-jobs/${jobId}`, { method: "DELETE" })
+}
+
+export async function triggerCronJob(agentId: string, jobId: string): Promise<void> {
+  await request(`/agents/${agentId}/cron-jobs/${jobId}/trigger`, { method: "POST" })
+}
+
+export async function listCronJobHistory(agentId: string, jobId: string): Promise<{ executions: CronJobExecution[] }> {
+  return request<{ executions: CronJobExecution[] }>(`/agents/${agentId}/cron-jobs/${jobId}/history`)
 }

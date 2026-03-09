@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/seaturt/server/internal/agent"
+	cronpkg "github.com/seaturt/server/internal/cron"
 	"github.com/gin-gonic/gin"
 )
 
@@ -23,7 +24,7 @@ type Server struct {
 // NewServer creates and configures the HTTP server with all routes registered.
 // webFS is an optional embedded filesystem containing the frontend build output (dist/).
 // When nil, only the API is served (development mode).
-func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS) *Server {
+func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS, scheduler ...*cronpkg.Scheduler) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	engine.Use(gin.Recovery())
@@ -34,6 +35,13 @@ func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS) *Ser
 	chatHandler := NewChatHandler(mgr, maxImageSize)
 	fileHandler := NewFileHandler(mgr)
 	sessionHandler := NewSessionHandler(mgr)
+
+	// CronJob handler (optional scheduler for testing without it)
+	var sched *cronpkg.Scheduler
+	if len(scheduler) > 0 {
+		sched = scheduler[0]
+	}
+	cronJobHandler := NewCronJobHandler(mgr, sched)
 
 	api := engine.Group("/api")
 	{
@@ -65,6 +73,15 @@ func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS) *Ser
 			agents.POST("/:id/sessions", sessionHandler.CreateSession)
 			agents.PUT("/:id/sessions/:sid", sessionHandler.UpdateSession)
 			agents.DELETE("/:id/sessions/:sid", sessionHandler.DeleteSession)
+
+			// CronJobs (v0.3.0)
+			agents.GET("/:id/cron-jobs", cronJobHandler.ListCronJobs)
+			agents.POST("/:id/cron-jobs", cronJobHandler.CreateCronJob)
+			agents.GET("/:id/cron-jobs/:jid", cronJobHandler.GetCronJob)
+			agents.PUT("/:id/cron-jobs/:jid", cronJobHandler.UpdateCronJob)
+			agents.DELETE("/:id/cron-jobs/:jid", cronJobHandler.DeleteCronJob)
+			agents.POST("/:id/cron-jobs/:jid/trigger", cronJobHandler.TriggerCronJob)
+			agents.GET("/:id/cron-jobs/:jid/history", cronJobHandler.ListCronJobHistory)
 
 			// Chat (session-level)
 			agents.POST("/:id/sessions/:sid/chat", chatHandler.Chat)

@@ -11,8 +11,10 @@ import (
 
 	"github.com/seaturt/server/internal/agent"
 	"github.com/seaturt/server/internal/api"
+	"github.com/seaturt/server/internal/builtin"
 	"github.com/seaturt/server/internal/config"
 	"github.com/seaturt/server/internal/container"
+	cronpkg "github.com/seaturt/server/internal/cron"
 	"github.com/seaturt/server/internal/llm"
 	"github.com/seaturt/server/internal/store"
 )
@@ -74,8 +76,23 @@ func main() {
 	// 初始化 Agent Manager
 	agentMgr := agent.NewManager(cfg, db, dockerMgr, llmClient)
 
+	// 初始化 Cron Scheduler (agentMgr implements cron.AgentExecutor)
+	scheduler := cronpkg.NewScheduler(db, agentMgr)
+
+	// 初始化 Builtin Tools Router (cron management tools)
+	cronHandlers := builtin.NewCronHandlers(db, scheduler)
+	builtinRouter := builtin.NewRouter(cronHandlers)
+	agentMgr.SetBuiltinRouter(builtinRouter)
+
 	// 启动时同步 Agent 状态与 Docker 容器实际状态
 	agentMgr.SyncAgentStates(context.Background())
+
+	// 加载已启用的定时任务并启动调度器
+	if err := scheduler.LoadAll(); err != nil {
+		slog.Warn("failed to load cron jobs", "err", err)
+	}
+	scheduler.Start()
+	defer scheduler.Stop()
 
 	// Check if embedded frontend exists (production mode)
 	var webFS fs.FS
@@ -89,7 +106,7 @@ func main() {
 	}
 
 	// 初始化 HTTP Server
-	server := api.NewServer(cfg.ServerPort, agentMgr, cfg.MaxImageSize, webFS)
+	server := api.NewServer(cfg.ServerPort, agentMgr, cfg.MaxImageSize, webFS, scheduler)
 
 	fmt.Printf("SeaTurt server listening on :%d\n", cfg.ServerPort)
 	if err := server.Run(); err != nil {

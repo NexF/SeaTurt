@@ -138,3 +138,32 @@ export interface UIToolCall {
   isComplete: boolean
   isStreaming?: boolean
 }
+
+// CronJob types (v0.3.0)
+export interface CronJob {
+  id: string
+  agent_id: string
+  type: "cron" | "at"
+  cron_expr: string
+  run_at: string | null
+  prompt: string
+  session_strategy: "fixed" | "new"
+  session_id: string
+  enabled: boolean
+  last_run_at: string | null
+  next_run_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CronJobExecution {
+  id: string
+  cron_job_id: string
+  agent_id: string
+  session_id: string
+  status: "success" | "failed" | "skipped"
+  error: string
+  duration: number
+  started_at: string
+  created_at: string
+}

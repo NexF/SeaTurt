@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import { Agent, AgentStatus, ModelItem, Session } from "@/types"
+import { Agent, AgentStatus, ModelItem, Session, CronJob } from "@/types"
 import * as api from "@/services/api"
 
 type AgentOperation = "starting" | "stopping" | "deleting"
@@ -18,6 +18,9 @@ interface AgentStore {
   selectedSessionId: string | null
   expandedAgentIds: Set<string>
 
+  // CronJob state
+  cronJobs: Record<string, CronJob[]>  // agentId -> cronJobs
+
   fetchAgents: () => Promise<void>
   fetchModels: () => Promise<void>
   selectAgent: (id: string | null) => void
@@ -35,6 +38,24 @@ interface AgentStore {
   renameSession: (agentId: string, sessionId: string, title: string) => Promise<void>
   selectSession: (agentId: string, sessionId: string) => void
   toggleAgent: (agentId: string) => void
+
+  // CronJob methods
+  fetchCronJobs: (agentId: string) => Promise<void>
+  createCronJob: (agentId: string, body: {
+    type: "cron" | "at"
+    cron_expr?: string
+    run_at?: string
+    prompt: string
+    session_strategy?: string
+  }) => Promise<CronJob>
+  updateCronJob: (agentId: string, jobId: string, body: {
+    prompt?: string
+    cron_expr?: string
+    run_at?: string
+    enabled?: boolean
+  }) => Promise<void>
+  deleteCronJob: (agentId: string, jobId: string) => Promise<void>
+  triggerCronJob: (agentId: string, jobId: string) => Promise<void>
 }
 
 const POLL_INTERVAL = 1500
@@ -71,6 +92,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   sessions: {},
   selectedSessionId: null,
   expandedAgentIds: new Set<string>(),
+  cronJobs: {},
 
   fetchAgents: async () => {
     try {
@@ -260,5 +282,55 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         }
       })
     }
+  },
+
+  // --- CronJob methods ---
+
+  fetchCronJobs: async (agentId) => {
+    try {
+      const res = await api.listCronJobs(agentId)
+      set((s) => ({
+        cronJobs: { ...s.cronJobs, [agentId]: res.cron_jobs },
+      }))
+    } catch (err) {
+      console.warn("Failed to fetch cron jobs:", err)
+    }
+  },
+
+  createCronJob: async (agentId, body) => {
+    const job = await api.createCronJob(agentId, body)
+    set((s) => ({
+      cronJobs: {
+        ...s.cronJobs,
+        [agentId]: [job, ...(s.cronJobs[agentId] || [])],
+      },
+    }))
+    return job
+  },
+
+  updateCronJob: async (agentId, jobId, body) => {
+    const updated = await api.updateCronJob(agentId, jobId, body)
+    set((s) => ({
+      cronJobs: {
+        ...s.cronJobs,
+        [agentId]: (s.cronJobs[agentId] || []).map((j) =>
+          j.id === jobId ? updated : j
+        ),
+      },
+    }))
+  },
+
+  deleteCronJob: async (agentId, jobId) => {
+    await api.deleteCronJob(agentId, jobId)
+    set((s) => ({
+      cronJobs: {
+        ...s.cronJobs,
+        [agentId]: (s.cronJobs[agentId] || []).filter((j) => j.id !== jobId),
+      },
+    }))
+  },
+
+  triggerCronJob: async (agentId, jobId) => {
+    await api.triggerCronJob(agentId, jobId)
   },
 }))

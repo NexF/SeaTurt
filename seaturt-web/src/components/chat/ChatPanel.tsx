@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react"
-import { Settings, FolderOpen, Trash2, Plus, Pencil, Check, X } from "lucide-react"
+import { Settings, FolderOpen, Trash2, Plus, Pencil, Check, X, Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import {
@@ -18,6 +18,7 @@ import { useAgentStore } from "@/stores/agentStore"
 import MessageBubble from "./MessageBubble"
 import InputBar from "./InputBar"
 import AgentSettings from "@/components/agent/AgentSettings"
+import CronJobPanel from "@/components/cron/CronJobPanel"
 import { cn } from "@/lib/utils"
 
 const EMPTY_SESSIONS: Session[] = []
@@ -45,6 +46,7 @@ export default function ChatPanel({ agent, sessionId, onToggleWorkspace, workspa
   const scrollRef = useRef<HTMLDivElement>(null)
   const userScrolledUp = useRef(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [cronPanelOpen, setCronPanelOpen] = useState(false)
 
   // Session title editing
   const sessions = useAgentStore((s) => s.sessions[agent.id] ?? EMPTY_SESSIONS)
@@ -112,6 +114,14 @@ export default function ChatPanel({ agent, sessionId, onToggleWorkspace, workspa
           </div>
           <div className="flex items-center gap-1">
             <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setCronPanelOpen(true)}>
+                    <Clock className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>定时任务</TooltipContent>
+              </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSettingsOpen(true)}>
@@ -227,6 +237,9 @@ export default function ChatPanel({ agent, sessionId, onToggleWorkspace, workspa
 
       {/* Settings Dialog */}
       <AgentSettings agent={agent} open={settingsOpen} onOpenChange={setSettingsOpen} />
+
+      {/* CronJob Panel */}
+      <CronJobPanel agent={agent} open={cronPanelOpen} onOpenChange={setCronPanelOpen} />
 
       {/* Clear History Confirmation */}
       <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>

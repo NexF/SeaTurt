@@ -36,6 +36,19 @@ type Store interface {
 	ListSessions(agentID string) ([]*Session, error)
 	UpdateSession(s *Session) error
 	DeleteSession(id string) error
+	// CronJob CRUD (v0.3.0)
+	CreateCronJob(job *CronJob) error
+	GetCronJob(id string) (*CronJob, error)
+	ListCronJobs(agentID string) ([]*CronJob, error)
+	ListAllEnabledCronJobs() ([]*CronJob, error)
+	UpdateCronJob(job *CronJob) error
+	DeleteCronJob(id string) error
+	DeleteCronJobsByAgent(agentID string) error
+	// CronJobExecution CRUD (v0.3.0)
+	CreateCronJobExecution(exec *CronJobExecution) error
+	ListCronJobExecutions(cronJobID string) ([]*CronJobExecution, error)
+	DeleteCronJobExecutions(cronJobID string) error
+	DeleteCronJobExecutionsByAgent(agentID string) error
 }
 
 // Manager manages Agent lifecycle: create, start, stop, delete.
@@ -49,7 +62,11 @@ type Manager struct {
 
 	// Per-agent runtime state (only for running agents)
 	registries map[string]*mcp.ToolRegistry // agent_id -> registry
-	routers    map[string]ToolRouter        // agent_id -> router (ToolRouter interface)
+	routers    map[string]ToolRouter        // agent_id -> router (ToolRouter interface, may be CompositeRouter)
+
+	// Shared builtin ToolRouter (same instance for all agents, agentID via context).
+	// Nil until SetBuiltinRouter is called.
+	builtinRouter ToolRouter
 
 	// Per-agent active chat session cancel functions.
 	// Key: sessionID, Value: context.CancelFunc for the running RunLoop.
@@ -287,7 +304,15 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 	executor := mcp.NewExecutor(m.docker, containerID, containerToolsDir)
 
 	// Create Router
-	router := mcp.NewRouter(registry, executor)
+	mcpRouter := mcp.NewRouter(registry, executor)
+
+	// Merge MCP router with builtin router (if available)
+	var router ToolRouter
+	if br := m.getBuiltinRouter(); br != nil {
+		router = NewCompositeRouter(mcpRouter, br)
+	} else {
+		router = mcpRouter
+	}
 
 	// Save runtime state
 	m.mu.Lock()
@@ -378,7 +403,15 @@ func (m *Manager) SyncAgentStates(ctx context.Context) {
 
 		containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
 		executor := mcp.NewExecutor(m.docker, ag.ContainerID, containerToolsDir)
-		router := mcp.NewRouter(registry, executor)
+		mcpRouter := mcp.NewRouter(registry, executor)
+
+		// Merge MCP router with builtin router (if available)
+		var router ToolRouter
+		if br := m.getBuiltinRouter(); br != nil {
+			router = NewCompositeRouter(mcpRouter, br)
+		} else {
+			router = mcpRouter
+		}
 
 		m.mu.Lock()
 		m.registries[ag.ID] = registry
@@ -448,7 +481,15 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 	}
 
 	executor := mcp.NewExecutor(m.docker, ag.ContainerID, containerToolsDir)
-	router := mcp.NewRouter(registry, executor)
+	mcpRouter := mcp.NewRouter(registry, executor)
+
+	// Merge MCP router with builtin router (if available)
+	var router ToolRouter
+	if br := m.getBuiltinRouter(); br != nil {
+		router = NewCompositeRouter(mcpRouter, br)
+	} else {
+		router = mcpRouter
+	}
 
 	m.mu.Lock()
 	m.registries[id] = registry
@@ -520,6 +561,14 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		slog.Warn("failed to delete messages", "id", id, "err", err)
 	}
 
+	// Delete cron job executions and cron jobs (cascade)
+	if err := m.store.DeleteCronJobExecutionsByAgent(id); err != nil {
+		slog.Warn("failed to delete cron job executions", "id", id, "err", err)
+	}
+	if err := m.store.DeleteCronJobsByAgent(id); err != nil {
+		slog.Warn("failed to delete cron jobs", "id", id, "err", err)
+	}
+
 	// Delete agent from DB
 	if err := m.store.DeleteAgent(id); err != nil {
 		return fmt.Errorf("delete agent: %w", err)
@@ -576,6 +625,140 @@ func (m *Manager) GetStore() Store {
 // GetConfig returns the global config.
 func (m *Manager) GetConfig() *config.Config {
 	return m.cfg
+}
+
+// SetBuiltinRouter sets the shared builtin ToolRouter.
+// Must be called before agents are created/started so they can include builtin tools.
+func (m *Manager) SetBuiltinRouter(r ToolRouter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.builtinRouter = r
+}
+
+// getBuiltinRouter returns the shared builtin ToolRouter (may be nil).
+func (m *Manager) getBuiltinRouter() ToolRouter {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.builtinRouter
+}
+
+// ExecutePrompt implements cron.AgentExecutor — sends a prompt to an agent session
+// using the non-streaming Agent Loop. Used by the Scheduler for cron/at task execution.
+func (m *Manager) ExecutePrompt(ctx context.Context, agentID, sessionID, prompt string) error {
+	ag, err := m.store.GetAgent(agentID)
+	if err != nil {
+		return fmt.Errorf("get agent: %w", err)
+	}
+
+	if ag.Status != StatusRunning {
+		return fmt.Errorf("agent %s is not running (status=%s)", agentID, ag.Status)
+	}
+
+	router := m.GetRouter(agentID)
+	if router == nil {
+		return fmt.Errorf("agent %s has no router available", agentID)
+	}
+
+	// If no sessionID, create a new session
+	if sessionID == "" {
+		now := time.Now()
+		sess := &Session{
+			ID:        fmt.Sprintf("sess_%d", now.UnixNano()),
+			AgentID:   agentID,
+			Title:     fmt.Sprintf("Cron: %s", truncateStr(prompt, 20)),
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := m.store.CreateSession(sess); err != nil {
+			return fmt.Errorf("create session: %w", err)
+		}
+		sessionID = sess.ID
+	}
+
+	// Load conversation history for the session
+	dbMessages, err := m.store.ListMessagesBySession(sessionID)
+	if err != nil {
+		return fmt.Errorf("load history: %w", err)
+	}
+
+	history := make([]llm.ChatMessage, 0, len(dbMessages))
+	for _, dm := range dbMessages {
+		cm := llm.ChatMessage{
+			Role:             dm.Role,
+			Content:          dm.Content,
+			ReasoningContent: dm.ReasoningContent,
+			ToolCallID:       dm.ToolCallID,
+		}
+		if dm.ToolCalls != "" {
+			var tcs []llm.ToolCall
+			if err := json.Unmarshal([]byte(dm.ToolCalls), &tcs); err == nil {
+				cm.ToolCalls = tcs
+			}
+		}
+		history = append(history, cm)
+	}
+
+	// Append user message
+	userMsg := &Message{
+		ID:        fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+		AgentID:   agentID,
+		SessionID: sessionID,
+		Role:      "user",
+		Content:   llm.Content{llm.NewTextContent(prompt)},
+		CreatedAt: time.Now(),
+	}
+	if err := m.store.CreateMessage(userMsg); err != nil {
+		slog.Error("failed to save cron user message", "err", err)
+	}
+
+	history = append(history, llm.ChatMessage{
+		Role:    "user",
+		Content: llm.Content{llm.NewTextContent(prompt)},
+	})
+
+	// Build LoopConfig with non-streaming persistence
+	loopCfg := LoopConfig{
+		LLMClient:    m.GetLLMClientForAgent(ag),
+		Router:       router,
+		SystemPrompt: m.LoadSystemPrompt(ag),
+		OnMessage: func(msg llm.ChatMessage) {
+			dbMsg := &Message{
+				ID:               fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+				AgentID:          agentID,
+				SessionID:        sessionID,
+				Role:             msg.Role,
+				Content:          msg.Content,
+				ReasoningContent: msg.ReasoningContent,
+				CreatedAt:        time.Now(),
+			}
+			if len(msg.ToolCalls) > 0 {
+				if tcJSON, err := json.Marshal(msg.ToolCalls); err == nil {
+					dbMsg.ToolCalls = string(tcJSON)
+				}
+			}
+			if msg.ToolCallID != "" {
+				dbMsg.ToolCallID = msg.ToolCallID
+			}
+			if err := m.store.CreateMessage(dbMsg); err != nil {
+				slog.Error("failed to save cron loop message", "role", msg.Role, "err", err)
+			}
+		},
+	}
+
+	// Inject agentID into context for builtin tools
+	ctx = context.WithValue(ctx, AgentIDContextKey, agentID)
+
+	_, _, err = RunLoopNonStream(ctx, loopCfg, history)
+	return err
+}
+
+// truncateStr truncates a string to maxRunes.
+func truncateStr(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 // LoadSystemPrompt reads SYSTEM.md template from the agent's workspace,

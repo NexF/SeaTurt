@@ -95,6 +95,40 @@ func (s *Store) migrate() error {
 	)`)
 	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id, updated_at)`)
 
+	// Create cron_jobs table (v0.3.0)
+	_, _ = s.db.Exec(`CREATE TABLE IF NOT EXISTS cron_jobs (
+		id               TEXT PRIMARY KEY,
+		agent_id         TEXT NOT NULL,
+		type             TEXT NOT NULL DEFAULT 'cron',
+		cron_expr        TEXT NOT NULL DEFAULT '',
+		run_at           DATETIME,
+		prompt           TEXT NOT NULL DEFAULT '',
+		session_strategy TEXT NOT NULL DEFAULT 'fixed',
+		session_id       TEXT NOT NULL DEFAULT '',
+		enabled          INTEGER NOT NULL DEFAULT 1,
+		last_run_at      DATETIME,
+		next_run_at      DATETIME,
+		created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+	)`)
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_id ON cron_jobs(agent_id)`)
+
+	// Create cron_job_executions table (v0.3.0)
+	_, _ = s.db.Exec(`CREATE TABLE IF NOT EXISTS cron_job_executions (
+		id          TEXT PRIMARY KEY,
+		cron_job_id TEXT NOT NULL,
+		agent_id    TEXT NOT NULL,
+		session_id  TEXT NOT NULL DEFAULT '',
+		status      TEXT NOT NULL DEFAULT 'success',
+		error       TEXT NOT NULL DEFAULT '',
+		duration    INTEGER NOT NULL DEFAULT 0,
+		started_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (cron_job_id) REFERENCES cron_jobs(id) ON DELETE CASCADE
+	)`)
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_cron_job_executions_job_id ON cron_job_executions(cron_job_id, created_at)`)
+
 	return nil
 }
 
@@ -311,6 +345,172 @@ func (s *Store) DeleteSession(id string) error {
 	}
 	_, err := s.db.Exec(`DELETE FROM sessions WHERE id = ?`, id)
 	return err
+}
+
+// --- CronJob CRUD ---
+
+func (s *Store) CreateCronJob(job *agent.CronJob) error {
+	_, err := s.db.Exec(
+		`INSERT INTO cron_jobs (id, agent_id, type, cron_expr, run_at, prompt, session_strategy, session_id, enabled, last_run_at, next_run_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		job.ID, job.AgentID, job.Type, job.CronExpr, job.RunAt, job.Prompt,
+		job.SessionStrategy, job.SessionID, job.Enabled, job.LastRunAt, job.NextRunAt,
+		job.CreatedAt, job.UpdatedAt,
+	)
+	return err
+}
+
+func (s *Store) GetCronJob(id string) (*agent.CronJob, error) {
+	row := s.db.QueryRow(
+		`SELECT id, agent_id, type, cron_expr, run_at, prompt, session_strategy, session_id, enabled, last_run_at, next_run_at, created_at, updated_at
+		 FROM cron_jobs WHERE id = ?`, id,
+	)
+	return scanCronJob(row)
+}
+
+func (s *Store) ListCronJobs(agentID string) ([]*agent.CronJob, error) {
+	rows, err := s.db.Query(
+		`SELECT id, agent_id, type, cron_expr, run_at, prompt, session_strategy, session_id, enabled, last_run_at, next_run_at, created_at, updated_at
+		 FROM cron_jobs WHERE agent_id = ? ORDER BY created_at DESC`, agentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanCronJobRows(rows)
+}
+
+func (s *Store) ListAllEnabledCronJobs() ([]*agent.CronJob, error) {
+	rows, err := s.db.Query(
+		`SELECT id, agent_id, type, cron_expr, run_at, prompt, session_strategy, session_id, enabled, last_run_at, next_run_at, created_at, updated_at
+		 FROM cron_jobs WHERE enabled = 1`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanCronJobRows(rows)
+}
+
+func (s *Store) UpdateCronJob(job *agent.CronJob) error {
+	_, err := s.db.Exec(
+		`UPDATE cron_jobs SET type = ?, cron_expr = ?, run_at = ?, prompt = ?, session_strategy = ?, session_id = ?, enabled = ?, last_run_at = ?, next_run_at = ?, updated_at = ? WHERE id = ?`,
+		job.Type, job.CronExpr, job.RunAt, job.Prompt, job.SessionStrategy, job.SessionID,
+		job.Enabled, job.LastRunAt, job.NextRunAt, job.UpdatedAt, job.ID,
+	)
+	return err
+}
+
+func (s *Store) DeleteCronJob(id string) error {
+	// Delete associated executions first
+	if _, err := s.db.Exec(`DELETE FROM cron_job_executions WHERE cron_job_id = ?`, id); err != nil {
+		return fmt.Errorf("delete cron job executions: %w", err)
+	}
+	_, err := s.db.Exec(`DELETE FROM cron_jobs WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) DeleteCronJobsByAgent(agentID string) error {
+	// Delete associated executions first
+	if _, err := s.db.Exec(`DELETE FROM cron_job_executions WHERE agent_id = ?`, agentID); err != nil {
+		return fmt.Errorf("delete cron job executions by agent: %w", err)
+	}
+	_, err := s.db.Exec(`DELETE FROM cron_jobs WHERE agent_id = ?`, agentID)
+	return err
+}
+
+// --- CronJobExecution CRUD ---
+
+func (s *Store) CreateCronJobExecution(exec *agent.CronJobExecution) error {
+	_, err := s.db.Exec(
+		`INSERT INTO cron_job_executions (id, cron_job_id, agent_id, session_id, status, error, duration, started_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		exec.ID, exec.CronJobID, exec.AgentID, exec.SessionID, exec.Status,
+		exec.Error, exec.Duration, exec.StartedAt, exec.CreatedAt,
+	)
+	return err
+}
+
+func (s *Store) ListCronJobExecutions(cronJobID string) ([]*agent.CronJobExecution, error) {
+	rows, err := s.db.Query(
+		`SELECT id, cron_job_id, agent_id, session_id, status, error, duration, started_at, created_at
+		 FROM cron_job_executions WHERE cron_job_id = ? ORDER BY created_at DESC`, cronJobID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var executions []*agent.CronJobExecution
+	for rows.Next() {
+		exec := &agent.CronJobExecution{}
+		if err := rows.Scan(&exec.ID, &exec.CronJobID, &exec.AgentID, &exec.SessionID, &exec.Status, &exec.Error, &exec.Duration, &exec.StartedAt, &exec.CreatedAt); err != nil {
+			return nil, err
+		}
+		executions = append(executions, exec)
+	}
+	return executions, rows.Err()
+}
+
+func (s *Store) DeleteCronJobExecutions(cronJobID string) error {
+	_, err := s.db.Exec(`DELETE FROM cron_job_executions WHERE cron_job_id = ?`, cronJobID)
+	return err
+}
+
+func (s *Store) DeleteCronJobExecutionsByAgent(agentID string) error {
+	_, err := s.db.Exec(`DELETE FROM cron_job_executions WHERE agent_id = ?`, agentID)
+	return err
+}
+
+// --- CronJob scan helpers ---
+
+func scanCronJob(row scannable) (*agent.CronJob, error) {
+	job := &agent.CronJob{}
+	var runAt, lastRunAt, nextRunAt sql.NullTime
+	err := row.Scan(
+		&job.ID, &job.AgentID, &job.Type, &job.CronExpr, &runAt, &job.Prompt,
+		&job.SessionStrategy, &job.SessionID, &job.Enabled, &lastRunAt, &nextRunAt,
+		&job.CreatedAt, &job.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if runAt.Valid {
+		job.RunAt = &runAt.Time
+	}
+	if lastRunAt.Valid {
+		job.LastRunAt = &lastRunAt.Time
+	}
+	if nextRunAt.Valid {
+		job.NextRunAt = &nextRunAt.Time
+	}
+	return job, nil
+}
+
+func scanCronJobRows(rows *sql.Rows) ([]*agent.CronJob, error) {
+	var jobs []*agent.CronJob
+	for rows.Next() {
+		job := &agent.CronJob{}
+		var runAt, lastRunAt, nextRunAt sql.NullTime
+		if err := rows.Scan(
+			&job.ID, &job.AgentID, &job.Type, &job.CronExpr, &runAt, &job.Prompt,
+			&job.SessionStrategy, &job.SessionID, &job.Enabled, &lastRunAt, &nextRunAt,
+			&job.CreatedAt, &job.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if runAt.Valid {
+			job.RunAt = &runAt.Time
+		}
+		if lastRunAt.Valid {
+			job.LastRunAt = &lastRunAt.Time
+		}
+		if nextRunAt.Valid {
+			job.NextRunAt = &nextRunAt.Time
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
 }
 
 // --- Scan helpers ---
