@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import {
   Dialog,
   DialogContent,
@@ -44,12 +44,26 @@ export default function CronJobForm({ agentId, open, onOpenChange, editJob }: Pr
 
   const isEdit = !!editJob
 
+  // Sync form state when editJob changes (useState initializer only runs on mount)
+  useEffect(() => {
+    if (open) {
+      setJobType(editJob?.type || "cron")
+      setCronExpr(editJob?.cron_expr || "")
+      setRunAt(editJob?.run_at ? toDatetimeLocal(editJob.run_at) : "")
+      setPrompt(editJob?.prompt || "")
+      setSessionStrategy(editJob?.session_strategy || "fixed")
+      setCronExprError("")
+      setRunAtError("")
+      setPromptError("")
+    }
+  }, [editJob, open])
+
   const resetForm = () => {
-    setJobType(editJob?.type || "cron")
-    setCronExpr(editJob?.cron_expr || "")
-    setRunAt(editJob?.run_at ? toDatetimeLocal(editJob.run_at) : "")
-    setPrompt(editJob?.prompt || "")
-    setSessionStrategy(editJob?.session_strategy || "fixed")
+    setJobType("cron")
+    setCronExpr("")
+    setRunAt("")
+    setPrompt("")
+    setSessionStrategy("fixed")
     setCronExprError("")
     setRunAtError("")
     setPromptError("")
