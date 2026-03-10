@@ -35,6 +35,7 @@ func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS, sche
 	chatHandler := NewChatHandler(mgr, maxImageSize)
 	fileHandler := NewFileHandler(mgr)
 	sessionHandler := NewSessionHandler(mgr)
+	eventHandler := NewEventHandler(mgr)
 
 	// CronJob handler (optional scheduler for testing without it)
 	var sched *cronpkg.Scheduler
@@ -45,6 +46,9 @@ func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS, sche
 
 	api := engine.Group("/api")
 	{
+		// Global SSE events (v0.3.1)
+		api.GET("/events", eventHandler.GlobalEvents)
+
 		// Models
 		api.GET("/models", agentHandler.ListModels)
 
@@ -89,6 +93,9 @@ func NewServer(port int, mgr *agent.Manager, maxImageSize int, webFS fs.FS, sche
 			agents.POST("/:id/sessions/:sid/chat/cancel-tool/:toolCallId", chatHandler.CancelToolCall)
 			agents.GET("/:id/sessions/:sid/history", chatHandler.GetHistory)
 			agents.DELETE("/:id/sessions/:sid/history", chatHandler.DeleteHistory)
+
+			// Session-level SSE events (v0.3.1)
+			agents.GET("/:id/sessions/:sid/events", eventHandler.SessionEvents)
 
 			// Workspace files
 			agents.GET("/:id/files", fileHandler.ListFiles)

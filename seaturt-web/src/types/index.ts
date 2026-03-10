@@ -121,6 +121,7 @@ export type ChatSegment =
 export interface ChatMessage {
   id: string
   role: "user" | "assistant"
+  turnId?: string             // turn identifier for deduplication (v0.3.3)
   content: string // plain text (kept for backward compat and simple rendering)
   reasoningContent?: string // accumulated reasoning/thinking content
   images?: { data: string; mime_type: string }[]

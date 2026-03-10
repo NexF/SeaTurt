@@ -147,6 +147,16 @@ func (h *CronJobHandler) CreateCronJob(c *gin.Context) {
 			return
 		}
 		job.SessionID = sess.ID
+
+		// Broadcast session_created via GlobalBus so frontend refreshes session list
+		h.mgr.GetEventHub().Global().Publish(agent.AgentEvent{
+			Type:    "session_created",
+			AgentID: agentID,
+			Data: map[string]string{
+				"session_id": sess.ID,
+				"title":      sess.Title,
+			},
+		})
 	}
 
 	if err := h.mgr.GetStore().CreateCronJob(job); err != nil {

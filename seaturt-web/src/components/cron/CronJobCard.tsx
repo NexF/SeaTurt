@@ -86,7 +86,7 @@ export default function CronJobCard({ job, agentId, onEdit, onViewSession }: Pro
   return (
     <>
       <div
-        className={`border border-border rounded-lg p-3 transition-colors hover:border-ring ${
+        className={`border border-border rounded-lg p-3 transition-colors hover:border-ring min-w-0 overflow-hidden ${
           !job.enabled ? "opacity-55" : ""
         }`}
       >

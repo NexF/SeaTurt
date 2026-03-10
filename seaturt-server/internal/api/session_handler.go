@@ -81,6 +81,16 @@ func (h *SessionHandler) CreateSession(c *gin.Context) {
 		return
 	}
 
+	// Broadcast session_created via GlobalBus so other tabs / SSE subscribers see the new session
+	h.mgr.GetEventHub().Global().Publish(agent.AgentEvent{
+		Type:    "session_created",
+		AgentID: agentID,
+		Data: map[string]string{
+			"session_id": sess.ID,
+			"title":      sess.Title,
+		},
+	})
+
 	c.JSON(http.StatusCreated, sess)
 }
 
@@ -152,6 +162,15 @@ func (h *SessionHandler) DeleteSession(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Broadcast session_deleted via GlobalBus so other tabs / SSE subscribers see the removal
+	h.mgr.GetEventHub().Global().Publish(agent.AgentEvent{
+		Type:    "session_deleted",
+		AgentID: agentID,
+		Data: map[string]string{
+			"session_id": sessionID,
+		},
+	})
 
 	c.Status(http.StatusNoContent)
 }

@@ -6,7 +6,6 @@ import * as api from "@/services/api"
 interface PerSessionState {
   messages: ChatMessage[]
   isStreaming: boolean
-  abortController: AbortController | null
 }
 
 interface ChatStore {
@@ -18,12 +17,13 @@ interface ChatStore {
   loadHistory: (agentId: string, sessionId: string) => Promise<void>
   clearHistory: (agentId: string, sessionId: string) => Promise<void>
   sendMessage: (agentId: string, sessionId: string, text: string, images?: File[]) => void
+  handleStreamEvent: (sessionId: string, event: { type: string; data: unknown }) => void
   stopStreaming: (agentId: string, sessionId: string) => void
   cancelToolCall: (agentId: string, sessionId: string, toolCallId: string) => void
   reset: () => void
 }
 
-const emptyState: PerSessionState = { messages: [], isStreaming: false, abortController: null }
+const emptyState: PerSessionState = { messages: [], isStreaming: false }
 
 function getSessionState(states: Record<string, PerSessionState>, sessionId: string): PerSessionState {
   return states[sessionId] || emptyState
@@ -183,301 +183,303 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }))
   },
 
-  sendMessage: (agentId, sessionId, text, images) => {
-    const userMsg: ChatMessage = {
-      id: `user_${Date.now()}`,
-      role: "user",
-      content: text,
-      images: [],
-      isStreaming: false,
-    }
+  sendMessage: async (agentId, sessionId, text, images) => {
+    const turnId = `turn_${Date.now()}`
 
-    if (images && images.length > 0) {
-      userMsg.images = images.map((f) => ({
-        data: URL.createObjectURL(f),
-        mime_type: f.type,
-      }))
-    }
+    // Mark session as streaming (optimistic — events will arrive via SSE)
+    set((s) => ({
+      sessionStates: setSessionState(s.sessionStates, sessionId, { isStreaming: true }),
+    }))
 
-    const assistantMsg: ChatMessage = {
-      id: `assistant_${Date.now()}`,
-      role: "assistant",
-      content: "",
-      toolCalls: [],
-      segments: [],
-      isStreaming: true,
+    try {
+      await api.sendChatMessage(agentId, sessionId, { text, images, turnId })
+    } catch (err) {
+      console.error("Send message error:", err)
+      // If POST failed, revert streaming state and show error
+      set((s) => {
+        const prev = getSessionState(s.sessionStates, sessionId)
+        const msgs = [...prev.messages]
+        // Add an error message
+        msgs.push({
+          id: `error_${Date.now()}`,
+          role: "assistant",
+          content: `**Error:** ${(err as Error).message}`,
+          toolCalls: [],
+          segments: [{ type: "text", text: `**Error:** ${(err as Error).message}` }],
+          isStreaming: false,
+        })
+        return {
+          sessionStates: setSessionState(s.sessionStates, sessionId, {
+            messages: msgs,
+            isStreaming: false,
+          }),
+        }
+      })
     }
+  },
 
+  handleStreamEvent: (sessionId, event) => {
     set((s) => {
       const prev = getSessionState(s.sessionStates, sessionId)
+      let msgs = [...prev.messages]
+      if (msgs.length === 0 && event.type !== "user_message") return s
+
+      // Handle user_message event (v0.3.3) — dedup by turn_id
+      if (event.type === "user_message") {
+        const evtData = event.data as {
+          turn_id: string
+          id: string
+          content: string | Array<{ type: string; text?: string; image?: { data: string; mime_type: string } }>
+        }
+        const alreadyExists = msgs.some(
+          (m) => m.role === "user" && m.turnId === evtData.turn_id
+        )
+        if (!alreadyExists) {
+          // Create user message + assistant shell
+          let text = ""
+          let images: { data: string; mime_type: string }[] = []
+          if (typeof evtData.content === "string") {
+            // Backend serializes single text block as plain string
+            text = evtData.content
+          } else if (Array.isArray(evtData.content)) {
+            text = evtData.content
+              .filter((b) => b.type === "text")
+              .map((b) => b.text || "")
+              .join("")
+            images = evtData.content
+              .filter((b) => b.type === "image" && b.image)
+              .map((b) => ({ data: b.image!.data, mime_type: b.image!.mime_type }))
+          }
+          const userChatMsg: ChatMessage = {
+            id: evtData.id,
+            role: "user",
+            turnId: evtData.turn_id,
+            content: text,
+            images,
+            isStreaming: false,
+          }
+          // Create assistant shell for upcoming model response
+          const assistantShell: ChatMessage = {
+            id: `assistant_${Date.now()}`,
+            role: "assistant",
+            turnId: evtData.turn_id,
+            content: "",
+            toolCalls: [],
+            segments: [],
+            isStreaming: true,
+          }
+          msgs = [...msgs, userChatMsg, assistantShell]
+          return {
+            sessionStates: setSessionState(s.sessionStates, sessionId, {
+              ...prev,
+              messages: msgs,
+              isStreaming: true,
+            }),
+          }
+        }
+        // Already exists (own message) — skip
+        return s
+      }
+
+      // For all other events, operate on the last assistant message
+      if (msgs.length === 0) return s
+      const last = { ...msgs[msgs.length - 1] }
+      msgs[msgs.length - 1] = last
+
+      const segments = [...(last.segments || [])]
+      const toolCalls = [...(last.toolCalls || [])]
+
+      switch (event.type) {
+        case "reasoning_delta": {
+          const delta = event.data as { content: string }
+          last.reasoningContent = (last.reasoningContent || "") + delta.content
+          const lastSeg = segments[segments.length - 1]
+          if (lastSeg && lastSeg.type === "reasoning") {
+            segments[segments.length - 1] = {
+              type: "reasoning",
+              text: lastSeg.text + delta.content,
+            }
+          } else {
+            segments.push({ type: "reasoning", text: delta.content })
+          }
+          break
+        }
+        case "text_delta": {
+          const delta = event.data as { content: string }
+          last.content += delta.content
+          const lastSeg = segments[segments.length - 1]
+          if (lastSeg && lastSeg.type === "text") {
+            segments[segments.length - 1] = {
+              type: "text",
+              text: lastSeg.text + delta.content,
+            }
+          } else {
+            segments.push({ type: "text", text: delta.content })
+          }
+          break
+        }
+        case "tool_call_delta": {
+          const delta = event.data as { index: number; id?: string; name?: string; arguments?: string }
+          if (delta.id && delta.name) {
+            const tc: UIToolCall = {
+              id: delta.id,
+              name: delta.name,
+              arguments: delta.arguments ?? "",
+              isComplete: false,
+              isStreaming: true,
+            }
+            toolCalls.push(tc)
+            segments.push({ type: "tool_call", toolCall: tc })
+          } else {
+            const lastIdx = toolCalls.length - 1
+            if (lastIdx >= 0 && toolCalls[lastIdx].isStreaming) {
+              const updated = {
+                ...toolCalls[lastIdx],
+                arguments: toolCalls[lastIdx].arguments + (delta.arguments ?? ""),
+              }
+              toolCalls[lastIdx] = updated
+              const segIdx = segments.findIndex(
+                (seg) => seg.type === "tool_call" && seg.toolCall?.id === updated.id
+              )
+              if (segIdx !== -1) {
+                segments[segIdx] = { type: "tool_call", toolCall: updated }
+              }
+            }
+          }
+          break
+        }
+        case "tool_call": {
+          const tc = event.data as { id: string; name: string; arguments: string }
+          const existingIdx = toolCalls.findIndex((t) => t && t.id === tc.id)
+          if (existingIdx !== -1) {
+            toolCalls[existingIdx] = {
+              ...toolCalls[existingIdx],
+              arguments: tc.arguments,
+              isStreaming: false,
+            }
+            const segIdx = segments.findIndex(
+              (seg) => seg.type === "tool_call" && seg.toolCall.id === tc.id
+            )
+            if (segIdx !== -1) {
+              segments[segIdx] = { type: "tool_call", toolCall: toolCalls[existingIdx] }
+            }
+          } else {
+            const uiTc: UIToolCall = {
+              id: tc.id,
+              name: tc.name,
+              arguments: tc.arguments,
+              isComplete: false,
+              isStreaming: false,
+            }
+            toolCalls.push(uiTc)
+            segments.push({ type: "tool_call", toolCall: uiTc })
+          }
+          break
+        }
+        case "tool_result": {
+          const tr = event.data as {
+            tool_call_id: string
+            content: ContentBlock[]
+            is_error: boolean
+          }
+          const idx = toolCalls.findIndex((t) => t.id === tr.tool_call_id)
+          if (idx !== -1) {
+            toolCalls[idx] = {
+              ...toolCalls[idx],
+              result: tr.content,
+              isError: tr.is_error,
+              isComplete: true,
+            }
+            const segIdx = segments.findIndex(
+              (seg) => seg.type === "tool_call" && seg.toolCall.id === tr.tool_call_id
+            )
+            if (segIdx !== -1) {
+              segments[segIdx] = { type: "tool_call", toolCall: toolCalls[idx] }
+            }
+          }
+          break
+        }
+        case "error": {
+          const err = event.data as { message: string }
+          const errText = `\n\n**Error:** ${err.message}`
+          last.content += errText
+          const lastSeg = segments[segments.length - 1]
+          if (lastSeg && lastSeg.type === "text") {
+            segments[segments.length - 1] = {
+              type: "text",
+              text: lastSeg.text + errText,
+            }
+          } else {
+            segments.push({ type: "text", text: errText })
+          }
+          last.isStreaming = false
+          break
+        }
+        case "done": {
+          last.isStreaming = false
+          break
+        }
+        case "session_updated": {
+          const update = event.data as { session_id: string; title: string }
+          if (update.session_id && update.title) {
+            useAgentStore.setState((agentState) => {
+              const newSessions = { ...agentState.sessions }
+              for (const aid of Object.keys(newSessions)) {
+                const list = newSessions[aid]
+                if (list?.some((sess) => sess.id === update.session_id)) {
+                  newSessions[aid] = list.map((sess) =>
+                    sess.id === update.session_id ? { ...sess, title: update.title } : sess
+                  )
+                  break
+                }
+              }
+              return { sessions: newSessions }
+            })
+          }
+          break
+        }
+        case "cancelled": {
+          for (let i = 0; i < toolCalls.length; i++) {
+            if (!toolCalls[i].isComplete) {
+              toolCalls[i] = {
+                ...toolCalls[i],
+                isComplete: true,
+                isError: true,
+                result: [{ type: "text", text: "已取消" }],
+              }
+            }
+          }
+          for (let i = 0; i < segments.length; i++) {
+            const seg = segments[i]
+            if (seg.type === "tool_call" && !seg.toolCall.isComplete) {
+              const updated = toolCalls.find(tc => tc.id === seg.toolCall.id)
+              if (updated) {
+                segments[i] = { type: "tool_call", toolCall: updated }
+              }
+            }
+          }
+          last.isStreaming = false
+          break
+        }
+      }
+
+      last.segments = segments
+      last.toolCalls = toolCalls
+      // Set session-level isStreaming to false on terminal events (done, cancelled, error)
+      const isTerminal = event.type === "done" || event.type === "cancelled" || event.type === "error"
       return {
         sessionStates: setSessionState(s.sessionStates, sessionId, {
-          messages: [...prev.messages, userMsg, assistantMsg],
-          isStreaming: true,
+          ...prev,
+          messages: msgs,
+          ...(isTerminal ? { isStreaming: false } : {}),
         }),
       }
     })
-
-    const controller = api.streamChat(
-      agentId,
-      sessionId,
-      { text, images },
-      (event) => {
-        set((s) => {
-          const prev = getSessionState(s.sessionStates, sessionId)
-          const msgs = [...prev.messages]
-          const last = { ...msgs[msgs.length - 1] }
-          msgs[msgs.length - 1] = last
-
-          const segments = [...(last.segments || [])]
-          const toolCalls = [...(last.toolCalls || [])]
-
-          switch (event.type) {
-            case "reasoning_delta": {
-              const delta = event.data as { content: string }
-              last.reasoningContent = (last.reasoningContent || "") + delta.content
-              const lastSeg = segments[segments.length - 1]
-              if (lastSeg && lastSeg.type === "reasoning") {
-                segments[segments.length - 1] = {
-                  type: "reasoning",
-                  text: lastSeg.text + delta.content,
-                }
-              } else {
-                segments.push({ type: "reasoning", text: delta.content })
-              }
-              break
-            }
-            case "text_delta": {
-              const delta = event.data as { content: string }
-              last.content += delta.content
-              const lastSeg = segments[segments.length - 1]
-              if (lastSeg && lastSeg.type === "text") {
-                segments[segments.length - 1] = {
-                  type: "text",
-                  text: lastSeg.text + delta.content,
-                }
-              } else {
-                segments.push({ type: "text", text: delta.content })
-              }
-              break
-            }
-            case "tool_call_delta": {
-              const delta = event.data as { index: number; id?: string; name?: string; arguments?: string }
-              if (delta.id && delta.name) {
-                const tc: UIToolCall = {
-                  id: delta.id,
-                  name: delta.name,
-                  arguments: delta.arguments ?? "",
-                  isComplete: false,
-                  isStreaming: true,
-                }
-                toolCalls.push(tc)
-                segments.push({ type: "tool_call", toolCall: tc })
-              } else {
-                const lastIdx = toolCalls.length - 1
-                if (lastIdx >= 0 && toolCalls[lastIdx].isStreaming) {
-                  const updated = {
-                    ...toolCalls[lastIdx],
-                    arguments: toolCalls[lastIdx].arguments + (delta.arguments ?? ""),
-                  }
-                  toolCalls[lastIdx] = updated
-                  const segIdx = segments.findIndex(
-                    (seg) => seg.type === "tool_call" && seg.toolCall?.id === updated.id
-                  )
-                  if (segIdx !== -1) {
-                    segments[segIdx] = { type: "tool_call", toolCall: updated }
-                  }
-                }
-              }
-              break
-            }
-            case "tool_call": {
-              const tc = event.data as { id: string; name: string; arguments: string }
-              const existingIdx = toolCalls.findIndex((t) => t && t.id === tc.id)
-              if (existingIdx !== -1) {
-                toolCalls[existingIdx] = {
-                  ...toolCalls[existingIdx],
-                  arguments: tc.arguments,
-                  isStreaming: false,
-                }
-                const segIdx = segments.findIndex(
-                  (seg) => seg.type === "tool_call" && seg.toolCall.id === tc.id
-                )
-                if (segIdx !== -1) {
-                  segments[segIdx] = { type: "tool_call", toolCall: toolCalls[existingIdx] }
-                }
-              } else {
-                const uiTc: UIToolCall = {
-                  id: tc.id,
-                  name: tc.name,
-                  arguments: tc.arguments,
-                  isComplete: false,
-                  isStreaming: false,
-                }
-                toolCalls.push(uiTc)
-                segments.push({ type: "tool_call", toolCall: uiTc })
-              }
-              break
-            }
-            case "tool_result": {
-              const tr = event.data as {
-                tool_call_id: string
-                content: ContentBlock[]
-                is_error: boolean
-              }
-              const idx = toolCalls.findIndex((t) => t.id === tr.tool_call_id)
-              if (idx !== -1) {
-                toolCalls[idx] = {
-                  ...toolCalls[idx],
-                  result: tr.content,
-                  isError: tr.is_error,
-                  isComplete: true,
-                }
-                const segIdx = segments.findIndex(
-                  (seg) => seg.type === "tool_call" && seg.toolCall.id === tr.tool_call_id
-                )
-                if (segIdx !== -1) {
-                  segments[segIdx] = { type: "tool_call", toolCall: toolCalls[idx] }
-                }
-              }
-              break
-            }
-            case "error": {
-              const err = event.data as { message: string }
-              const errText = `\n\n**Error:** ${err.message}`
-              last.content += errText
-              const lastSeg = segments[segments.length - 1]
-              if (lastSeg && lastSeg.type === "text") {
-                segments[segments.length - 1] = {
-                  type: "text",
-                  text: lastSeg.text + errText,
-                }
-              } else {
-                segments.push({ type: "text", text: errText })
-              }
-              break
-            }
-            case "done": {
-              last.isStreaming = false
-              break
-            }
-            case "session_updated": {
-              const update = event.data as { session_id: string; title: string }
-              if (update.session_id && update.title) {
-                // Directly update local state — backend already persisted the title
-                useAgentStore.setState((s) => {
-                  const newSessions = { ...s.sessions }
-                  for (const aid of Object.keys(newSessions)) {
-                    const list = newSessions[aid]
-                    if (list?.some((sess) => sess.id === update.session_id)) {
-                      newSessions[aid] = list.map((sess) =>
-                        sess.id === update.session_id ? { ...sess, title: update.title } : sess
-                      )
-                      break
-                    }
-                  }
-                  return { sessions: newSessions }
-                })
-              }
-              break
-            }
-            case "cancelled": {
-              for (let i = 0; i < toolCalls.length; i++) {
-                if (!toolCalls[i].isComplete) {
-                  toolCalls[i] = {
-                    ...toolCalls[i],
-                    isComplete: true,
-                    isError: true,
-                    result: [{ type: "text", text: "已取消" }],
-                  }
-                }
-              }
-              for (let i = 0; i < segments.length; i++) {
-                const seg = segments[i]
-                if (seg.type === "tool_call" && !seg.toolCall.isComplete) {
-                  const updated = toolCalls.find(tc => tc.id === seg.toolCall.id)
-                  if (updated) {
-                    segments[i] = { type: "tool_call", toolCall: updated }
-                  }
-                }
-              }
-              last.isStreaming = false
-              break
-            }
-          }
-
-          last.segments = segments
-          last.toolCalls = toolCalls
-          return { sessionStates: setSessionState(s.sessionStates, sessionId, { ...prev, messages: msgs }) }
-        })
-      },
-      () => {
-        set((s) => ({
-          sessionStates: setSessionState(s.sessionStates, sessionId, { isStreaming: false, abortController: null }),
-        }))
-      },
-      (err) => {
-        console.error("Stream error:", err)
-        set((s) => {
-          const prev = getSessionState(s.sessionStates, sessionId)
-          const msgs = [...prev.messages]
-          if (msgs.length > 0) {
-            const last = { ...msgs[msgs.length - 1] }
-            last.content += `\n\n**Error:** ${err.message}`
-            last.isStreaming = false
-            msgs[msgs.length - 1] = last
-          }
-          return {
-            sessionStates: setSessionState(s.sessionStates, sessionId, {
-              messages: msgs,
-              isStreaming: false,
-              abortController: null,
-            }),
-          }
-        })
-      }
-    )
-
-    set((s) => ({
-      sessionStates: setSessionState(s.sessionStates, sessionId, { abortController: controller }),
-    }))
   },
 
   stopStreaming: (agentId, sessionId) => {
-    const state = getSessionState(get().sessionStates, sessionId)
-    if (!state.abortController) return
-
+    // Cancel on server side — the SSE channel will receive "cancelled" event
     api.cancelChat(agentId, sessionId).catch(() => {})
-    state.abortController.abort()
-
-    set((s) => {
-      const prev = getSessionState(s.sessionStates, sessionId)
-      const msgs = [...prev.messages]
-      if (msgs.length > 0) {
-        const last = { ...msgs[msgs.length - 1] }
-        last.isStreaming = false
-        if (last.toolCalls?.length) {
-          last.toolCalls = last.toolCalls.map(tc =>
-            tc.isComplete ? tc : { ...tc, isComplete: true, isError: true, result: [{ type: "text", text: "已取消" }] }
-          )
-        }
-        if (last.segments?.length) {
-          last.segments = last.segments.map(seg =>
-            seg.type === "tool_call" && !seg.toolCall.isComplete
-              ? { type: "tool_call" as const, toolCall: { ...seg.toolCall, isComplete: true, isError: true, result: [{ type: "text" as const, text: "已取消" }] } }
-              : seg
-          )
-        }
-        msgs[msgs.length - 1] = last
-      }
-      return {
-        sessionStates: setSessionState(s.sessionStates, sessionId, {
-          messages: msgs,
-          isStreaming: false,
-          abortController: null,
-        }),
-      }
-    })
   },
 
   cancelToolCall: (agentId, sessionId, toolCallId) => {

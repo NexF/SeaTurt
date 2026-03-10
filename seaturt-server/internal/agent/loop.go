@@ -61,8 +61,16 @@ type LoopConfig struct {
 
 // StreamEvent represents an event emitted during the agent loop for SSE streaming.
 type StreamEvent struct {
-	Type string `json:"type"` // "text_delta", "tool_call", "tool_result", "error", "done"
-	Data any    `json:"data"`
+	Type   string `json:"type"`              // "text_delta", "tool_call", "tool_result", "error", "done", "user_message"
+	TurnID string `json:"turn_id,omitempty"` // associates all events in one turn (v0.3.3)
+	Data   any    `json:"data"`
+}
+
+// UserMessageEvent is the data for a "user_message" event (v0.3.3).
+type UserMessageEvent struct {
+	TurnID  string      `json:"turn_id"`
+	ID      string      `json:"id"`      // backend message ID
+	Content llm.Content `json:"content"` // user message content (text + images)
 }
 
 // TextDelta is the data for a "text_delta" event.
@@ -143,7 +151,7 @@ func (c *CompositeRouter) Route(ctx context.Context, toolName string, args map[s
 // RunLoopNonStream is a simplified, non-streaming version of RunLoop for cron/programmatic execution.
 // It runs the Agent Loop synchronously and returns the final response text.
 func RunLoopNonStream(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage) (string, []llm.ChatMessage, error) {
-	return RunLoop(ctx, cfg, history, nil)
+	return RunLoop(ctx, cfg, history, nil, "")
 }
 
 // RunLoop executes the Agent Loop:
@@ -155,8 +163,15 @@ func RunLoopNonStream(ctx context.Context, cfg LoopConfig, history []llm.ChatMes
 //
 // The streamFn is called for each event (text delta, tool call, tool result).
 // It may be nil for non-streaming use.
+// turnID is the turn identifier; if non-empty, all emitted StreamEvents carry it.
 // Returns the full assistant response and the updated message history.
-func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc) (string, []llm.ChatMessage, error) {
+func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, streamFn StreamFunc, turnID string) (string, []llm.ChatMessage, error) {
+	// Helper: emit a stream event with turn_id
+	emit := func(eventType string, data any) {
+		if streamFn != nil {
+			streamFn(StreamEvent{Type: eventType, TurnID: turnID, Data: data})
+		}
+	}
 	// Collect all tools from the router and convert to OpenAI format
 	mcpTools := cfg.Router.AllTools()
 	toolDefs := llm.ConvertMCPTools(mcpTools)
@@ -195,16 +210,11 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 			if cfg.OnMessage != nil {
 				cfg.OnMessage(msg)
 			}
-			if streamFn != nil {
-				streamFn(StreamEvent{
-					Type: "tool_result",
-					Data: ToolResultEvent{
-						ToolCallID: msg.ToolCallID,
-						Content:    []llm.ContentBlock(msg.Content),
-						IsError:    true,
-					},
-				})
-			}
+			emit("tool_result", ToolResultEvent{
+				ToolCallID: msg.ToolCallID,
+				Content:    []llm.ContentBlock(msg.Content),
+				IsError:    true,
+			})
 		}
 	}()
 
@@ -213,9 +223,7 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 	for i := 0; i < MaxLoopIterations; i++ {
 		// Checkpoint: check ctx at the start of each iteration
 		if err := ctx.Err(); err != nil {
-			if streamFn != nil {
-				streamFn(StreamEvent{Type: "cancelled", Data: nil})
-			}
+			emit("cancelled", nil)
 			return "", messages, fmt.Errorf("cancelled: %w", err)
 		}
 
@@ -227,26 +235,17 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 		if streamFn != nil {
 			resp, err = cfg.LLMClient.ChatCompletionStreamV2(ctx, messages, toolDefs, func(data llm.StreamCallbackData) error {
 				if data.Content != "" {
-					streamFn(StreamEvent{
-						Type: "text_delta",
-						Data: TextDelta{Content: data.Content},
-					})
+					emit("text_delta", TextDelta{Content: data.Content})
 				}
 				if data.ReasoningContent != "" {
-					streamFn(StreamEvent{
-						Type: "reasoning_delta",
-						Data: ReasoningDelta{Content: data.ReasoningContent},
-					})
+					emit("reasoning_delta", ReasoningDelta{Content: data.ReasoningContent})
 				}
 				for _, tcd := range data.ToolCallDeltas {
-					streamFn(StreamEvent{
-						Type: "tool_call_delta",
-						Data: ToolCallDeltaEvent{
-							Index:     tcd.Index,
-							ID:        tcd.ID,
-							Name:      tcd.Name,
-							Arguments: tcd.Arguments,
-						},
+					emit("tool_call_delta", ToolCallDeltaEvent{
+						Index:     tcd.Index,
+						ID:        tcd.ID,
+						Name:      tcd.Name,
+						Arguments: tcd.Arguments,
 					})
 				}
 				return nil
@@ -295,7 +294,7 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 			}
 
 			if streamFn != nil {
-				streamFn(StreamEvent{Type: "error", Data: map[string]string{"message": err.Error()}})
+				emit("error", map[string]string{"message": err.Error()})
 			}
 			return "", messages, fmt.Errorf("LLM call failed (iteration %d): %w", i, err)
 		}
@@ -315,9 +314,7 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 		// No tool calls → final response
 		if len(assistantMsg.ToolCalls) == 0 {
 			finalContent = assistantMsg.Content.String()
-			if streamFn != nil {
-				streamFn(StreamEvent{Type: "done", Data: nil})
-			}
+			emit("done", nil)
 			slog.Info("agent loop completed", "iterations", i+1)
 			return finalContent, messages, nil
 		}
@@ -326,22 +323,15 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 		for _, tc := range assistantMsg.ToolCalls {
 			// Checkpoint: check ctx before each tool call
 			if err := ctx.Err(); err != nil {
-				if streamFn != nil {
-					streamFn(StreamEvent{Type: "cancelled", Data: nil})
-				}
+				emit("cancelled", nil)
 				return "", messages, fmt.Errorf("cancelled: %w", err)
 			}
 
-			if streamFn != nil {
-				streamFn(StreamEvent{
-					Type: "tool_call",
-					Data: ToolCallEvent{
-						ID:        tc.ID,
-						Name:      tc.Function.Name,
-						Arguments: tc.Function.Arguments,
-					},
-				})
-			}
+			emit("tool_call", ToolCallEvent{
+				ID:        tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			})
 
 			slog.Debug("executing tool call",
 				"id", tc.ID,
@@ -382,17 +372,12 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 							Content:    llm.Content(toolResultBlocks),
 							ToolCallID: tc.ID,
 						}
-						messages = append(messages, toolMsg)
-						if cfg.OnMessage != nil {
-							cfg.OnMessage(toolMsg)
-						}
-						if streamFn != nil {
-							streamFn(StreamEvent{
-								Type: "tool_result",
-								Data: ToolResultEvent{ToolCallID: tc.ID, Content: toolResultBlocks, IsError: true},
-							})
-						}
-						continue
+					messages = append(messages, toolMsg)
+					if cfg.OnMessage != nil {
+						cfg.OnMessage(toolMsg)
+					}
+					emit("tool_result", ToolResultEvent{ToolCallID: tc.ID, Content: toolResultBlocks, IsError: true})
+					continue
 					}
 				}
 			}
@@ -432,25 +417,18 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 				if cfg.OnMessage != nil {
 					cfg.OnMessage(toolMsg)
 				}
-				if streamFn != nil {
-					streamFn(StreamEvent{
-						Type: "tool_result",
-						Data: ToolResultEvent{
-							ToolCallID: tc.ID,
-							Content:    []llm.ContentBlock(cancelledContent),
-							IsError:    true,
-						},
-					})
-				}
+				emit("tool_result", ToolResultEvent{
+					ToolCallID: tc.ID,
+					Content:    []llm.ContentBlock(cancelledContent),
+					IsError:    true,
+				})
 				// Don't return — continue processing remaining tool calls or next LLM round
 				continue
 			}
 
 			// Check if chat-level context was cancelled
 			if err != nil && ctx.Err() != nil {
-				if streamFn != nil {
-					streamFn(StreamEvent{Type: "cancelled", Data: nil})
-				}
+				emit("cancelled", nil)
 				return "", messages, fmt.Errorf("cancelled: %w", ctx.Err())
 			}
 
@@ -479,10 +457,7 @@ func RunLoop(ctx context.Context, cfg LoopConfig, history []llm.ChatMessage, str
 			}
 
 			if streamFn != nil {
-				streamFn(StreamEvent{
-					Type: "tool_result",
-					Data: ToolResultEvent{ToolCallID: tc.ID, Content: []llm.ContentBlock(toolContent), IsError: isError},
-				})
+				emit("tool_result", ToolResultEvent{ToolCallID: tc.ID, Content: []llm.ContentBlock(toolContent), IsError: isError})
 			}
 		}
 	}

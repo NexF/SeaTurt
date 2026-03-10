@@ -19,6 +19,7 @@ import MessageBubble from "./MessageBubble"
 import InputBar from "./InputBar"
 import AgentSettings from "@/components/agent/AgentSettings"
 import CronJobPanel from "@/components/cron/CronJobPanel"
+import { useSessionEvents } from "@/hooks/useSessionEvents"
 import { cn } from "@/lib/utils"
 
 const EMPTY_SESSIONS: Session[] = []
@@ -47,6 +48,9 @@ export default function ChatPanel({ agent, sessionId, onToggleWorkspace, workspa
   const userScrolledUp = useRef(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [cronPanelOpen, setCronPanelOpen] = useState(false)
+
+  // Session-level SSE subscription — receives cron / multi-tab events (v0.3.1)
+  useSessionEvents(agent.id, sessionId)
 
   // Session title editing
   const sessions = useAgentStore((s) => s.sessions[agent.id] ?? EMPTY_SESSIONS)

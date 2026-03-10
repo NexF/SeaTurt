@@ -30,6 +30,7 @@ func NewChatHandler(mgr *agent.Manager, maxImageSize int) *ChatHandler {
 // ChatRequest is the request body for POST /api/agents/:id/chat (JSON mode).
 type ChatRequest struct {
 	Content []llm.ContentBlock `json:"content" binding:"required"`
+	TurnID  string             `json:"turn_id"` // frontend-generated turn ID (v0.3.3)
 }
 
 // allowedImageTypes lists accepted image MIME types.
@@ -40,13 +41,22 @@ var allowedImageTypes = map[string]bool{
 	"image/webp": true,
 }
 
-// Chat handles POST /api/agents/:id/sessions/:sid/chat — sends a message and streams the response via SSE.
+// ChatResponse is the JSON response for POST /api/agents/:id/sessions/:sid/chat.
+type ChatResponse struct {
+	TurnID    string `json:"turn_id"`
+	MessageID string `json:"message_id"`
+}
+
+// Chat handles POST /api/agents/:id/sessions/:sid/chat — accepts a message and kicks off
+// the agent loop in a background goroutine. All streaming events are delivered exclusively
+// through the session SSE channel (GET /api/agents/:id/sessions/:sid/events).
+// Returns immediately with {turn_id, message_id}.
 func (h *ChatHandler) Chat(c *gin.Context) {
 	id := c.Param("id")
 	sessionID := c.Param("sid")
 
-	// Parse content from either JSON or multipart
-	content, err := h.parseContent(c)
+	// Parse content and turn_id from either JSON or multipart
+	content, turnID, err := h.parseContentAndTurnID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -55,6 +65,11 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 	if len(content) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
 		return
+	}
+
+	// Auto-generate turn_id if not provided by frontend
+	if turnID == "" {
+		turnID = fmt.Sprintf("turn_%d", time.Now().UnixNano())
 	}
 
 	// Validate image blocks
@@ -117,8 +132,19 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 		slog.Error("failed to save user message", "err", err)
 	}
 
+	// Publish user_message event to SessionBus
+	sessionBus := h.mgr.GetEventHub().GetOrCreateSessionBus(sessionID)
+	sessionBus.Publish(agent.StreamEvent{
+		Type:   "user_message",
+		TurnID: turnID,
+		Data: agent.UserMessageEvent{
+			TurnID:  turnID,
+			ID:      userMsg.ID,
+			Content: userMsg.Content,
+		},
+	})
+
 	// Auto-generate session title from first user message
-	autoTitleUpdated := false
 	if isFirstMessage {
 		userText := llm.Content(content).String()
 		if userText != "" {
@@ -128,7 +154,15 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 			if err := store.UpdateSession(sess); err != nil {
 				slog.Warn("failed to auto-update session title", "err", err)
 			} else {
-				autoTitleUpdated = true
+				// Publish session_updated via SessionBus so SSE subscribers see the title change
+				sessionBus.Publish(agent.StreamEvent{
+					Type:   "session_updated",
+					TurnID: turnID,
+					Data: map[string]string{
+						"session_id": sessionID,
+						"title":      sess.Title,
+					},
+				})
 			}
 		}
 	}
@@ -142,45 +176,17 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 
 	history := convertToLLMMessages(dbMessages)
 
-	// Set SSE headers
-	c.Header("Content-Type", "text/event-stream; charset=utf-8")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("X-Accel-Buffering", "no")
-	c.Status(http.StatusOK)
-
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
-		return
-	}
-
-	// Notify frontend of session title auto-update before streaming LLM response
-	if autoTitleUpdated {
-		titleEvent, _ := json.Marshal(agent.StreamEvent{
-			Type: "session_updated",
-			Data: map[string]string{
-				"session_id": sessionID,
-				"title":      sess.Title,
-			},
-		})
-		fmt.Fprintf(c.Writer, "data: %s\n\n", titleEvent)
-		flusher.Flush()
-	}
-
-	// Create a cancellable context derived from the HTTP request context.
-	// Inject agentID for builtin tools.
-	ctx, cancel := context.WithCancel(c.Request.Context())
-	ctx = context.WithValue(ctx, agent.AgentIDContextKey, id)
-	defer cancel()
-	defer h.mgr.ClearActiveSession(sessionID)
-
 	// Cancel any previous active session for this session
 	h.mgr.CancelActiveSession(sessionID)
-	// Register this session
+
+	// Create a cancellable context (NOT derived from HTTP request — the goroutine outlives the request).
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = context.WithValue(ctx, agent.AgentIDContextKey, id)
+
+	// Register this session's cancel func
 	h.mgr.SetActiveSession(sessionID, cancel)
 
-	// Run agent loop with SSE streaming + incremental message saving
+	// Build loop config
 	loopCfg := agent.LoopConfig{
 		LLMClient:    h.mgr.GetLLMClientForAgent(ag),
 		Router:       router,
@@ -215,28 +221,31 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 		},
 	}
 
-	_, _, loopErr := agent.RunLoop(ctx, loopCfg, history, func(event agent.StreamEvent) {
-		data, err := json.Marshal(event)
-		if err != nil {
-			return
+	// Launch agent loop in background goroutine — all events go through SessionBus only.
+	go func() {
+		defer h.mgr.ClearActiveSession(sessionID)
+		defer cancel()
+
+		_, _, loopErr := agent.RunLoop(ctx, loopCfg, history, func(event agent.StreamEvent) {
+			sessionBus.Publish(event)
+		}, turnID)
+
+		// Update session updated_at after chat
+		sess.UpdatedAt = time.Now()
+		_ = store.UpdateSession(sess)
+
+		if loopErr != nil {
+			slog.Error("agent loop error", "agent_id", id, "session_id", sessionID, "err", loopErr)
+			// Error event is already emitted by RunLoop via emit("error", ...) or we push one
+			// for non-RunLoop errors (shouldn't happen, but be safe).
 		}
-		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
-		flusher.Flush()
+	}()
+
+	// Return immediately with turn_id and message_id
+	c.JSON(http.StatusOK, ChatResponse{
+		TurnID:    turnID,
+		MessageID: userMsg.ID,
 	})
-
-	// Update session updated_at after chat
-	sess.UpdatedAt = time.Now()
-	_ = store.UpdateSession(sess)
-
-	if loopErr != nil {
-		slog.Error("agent loop error", "agent_id", id, "session_id", sessionID, "err", loopErr)
-		errEvent, _ := json.Marshal(agent.StreamEvent{
-			Type: "error",
-			Data: map[string]string{"message": loopErr.Error()},
-		})
-		fmt.Fprintf(c.Writer, "data: %s\n\n", errEvent)
-		flusher.Flush()
-	}
 }
 
 // CancelChat handles POST /api/agents/:id/sessions/:sid/chat/cancel — cancels the entire active chat session.
@@ -278,21 +287,23 @@ func (h *ChatHandler) CancelToolCall(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
 }
 
-// parseContent extracts content blocks from the request.
+// parseContentAndTurnID extracts content blocks and turn_id from the request.
 // Supports both application/json and multipart/form-data.
-func (h *ChatHandler) parseContent(c *gin.Context) ([]llm.ContentBlock, error) {
+func (h *ChatHandler) parseContentAndTurnID(c *gin.Context) ([]llm.ContentBlock, string, error) {
 	contentType := c.ContentType()
 
 	if strings.HasPrefix(contentType, "multipart/form-data") {
-		return h.parseMultipartContent(c)
+		blocks, err := h.parseMultipartContent(c)
+		turnID := c.PostForm("turn_id")
+		return blocks, turnID, err
 	}
 
 	// Default: JSON
 	var req ChatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return nil, fmt.Errorf("invalid request: %w", err)
+		return nil, "", fmt.Errorf("invalid request: %w", err)
 	}
-	return req.Content, nil
+	return req.Content, req.TurnID, nil
 }
 
 // parseMultipartContent parses multipart/form-data with text and image fields.

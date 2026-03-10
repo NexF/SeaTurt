@@ -7,7 +7,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Agent, CronJob } from "@/types"
 import { useAgentStore } from "@/stores/agentStore"
 import CronJobCard from "./CronJobCard"
@@ -61,7 +60,7 @@ export default function CronJobPanel({ agent, open, onOpenChange }: Props) {
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[672px] max-h-[80vh] flex flex-col">
+        <DialogContent className="sm:max-w-[672px] max-h-[80vh] flex flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>定时任务 — {agent.name}</DialogTitle>
           </DialogHeader>
@@ -86,7 +85,7 @@ export default function CronJobPanel({ agent, open, onOpenChange }: Props) {
                   新建任务
                 </Button>
               </div>
-              <ScrollArea className="flex-1 -mx-6 px-6">
+              <div className="flex-1 -mx-6 px-6 overflow-y-auto overflow-x-hidden">
                 <div className="space-y-2 pb-2">
                   {cronJobs.map((job) => (
                     <CronJobCard
@@ -98,7 +97,7 @@ export default function CronJobPanel({ agent, open, onOpenChange }: Props) {
                     />
                   ))}
                 </div>
-              </ScrollArea>
+              </div>
             </>
           )}
         </DialogContent>

@@ -94,79 +94,51 @@ export async function cancelToolCall(agentId: string, sessionId: string, toolCal
 export interface ChatPayload {
   text: string
   images?: File[]
+  turnId?: string  // v0.3.3: turn identifier
 }
 
-export function streamChat(
+export interface ChatResponse {
+  turn_id: string
+  message_id: string
+}
+
+/**
+ * sendChatMessage — sends a user message to the agent (non-streaming POST).
+ * All streaming events are received exclusively via the session SSE channel
+ * (useSessionEvents → GET /api/agents/:id/sessions/:sid/events).
+ */
+export async function sendChatMessage(
   agentId: string,
   sessionId: string,
   payload: ChatPayload,
-  onEvent: (event: { type: string; data: unknown }) => void,
-  onDone: () => void,
-  onError: (err: Error) => void
-): AbortController {
-  const controller = new AbortController()
+): Promise<ChatResponse> {
+  let body: BodyInit
+  let headers: Record<string, string> = {}
 
-  const doFetch = async () => {
-    let body: BodyInit
-    let headers: Record<string, string> = {}
-
-    if (payload.images && payload.images.length > 0) {
-      const formData = new FormData()
-      formData.append("text", payload.text)
-      payload.images.forEach((img) => formData.append("image", img))
-      body = formData
-    } else {
-      const content: ContentBlock[] = [{ type: "text", text: payload.text }]
-      headers["Content-Type"] = "application/json"
-      body = JSON.stringify({ content })
-    }
-
-    const res = await fetch(`${BASE}/agents/${agentId}/sessions/${sessionId}/chat`, {
-      method: "POST",
-      headers,
-      body,
-      signal: controller.signal,
-    })
-
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(errBody.error || res.statusText)
-    }
-
-    const reader = res.body?.getReader()
-    if (!reader) throw new Error("No response body")
-
-    const decoder = new TextDecoder()
-    let buffer = ""
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split("\n")
-      buffer = lines.pop() || ""
-
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (trimmed.startsWith("data: ")) {
-          const jsonStr = trimmed.slice(6)
-          const parsed = JSON.parse(jsonStr)
-          onEvent(parsed)
-        }
-      }
-    }
-
-    onDone()
+  if (payload.images && payload.images.length > 0) {
+    const formData = new FormData()
+    formData.append("text", payload.text)
+    if (payload.turnId) formData.append("turn_id", payload.turnId)
+    payload.images.forEach((img) => formData.append("image", img))
+    body = formData
+  } else {
+    const content: ContentBlock[] = [{ type: "text", text: payload.text }]
+    headers["Content-Type"] = "application/json"
+    body = JSON.stringify({ content, turn_id: payload.turnId })
   }
 
-  doFetch().catch((err) => {
-    if (err.name !== "AbortError") {
-      onError(err)
-    }
+  const res = await fetch(`${BASE}/agents/${agentId}/sessions/${sessionId}/chat`, {
+    method: "POST",
+    headers,
+    body,
   })
 
-  return controller
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(errBody.error || res.statusText)
+  }
+
+  return res.json()
 }
 
 // Files

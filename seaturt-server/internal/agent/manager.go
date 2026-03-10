@@ -75,6 +75,9 @@ type Manager struct {
 	// Per-agent active tool call cancel functions.
 	// Key: sessionID, Value: map[toolCallID]context.CancelFunc
 	activeToolCalls map[string]map[string]context.CancelFunc
+
+	// Central event hub for SSE broadcasting (global + per-session events).
+	eventHub *EventHub
 }
 
 // NewManager creates a new Agent Manager.
@@ -88,6 +91,7 @@ func NewManager(cfg *config.Config, s Store, docker *container.Manager, llmClien
 		routers:         make(map[string]ToolRouter),
 		activeSessions:  make(map[string]context.CancelFunc),
 		activeToolCalls: make(map[string]map[string]context.CancelFunc),
+		eventHub:        NewEventHub(),
 	}
 }
 
@@ -622,6 +626,11 @@ func (m *Manager) GetStore() Store {
 	return m.store
 }
 
+// GetEventHub returns the central EventHub for SSE broadcasting.
+func (m *Manager) GetEventHub() *EventHub {
+	return m.eventHub
+}
+
 // GetConfig returns the global config.
 func (m *Manager) GetConfig() *config.Config {
 	return m.cfg
@@ -643,7 +652,8 @@ func (m *Manager) getBuiltinRouter() ToolRouter {
 }
 
 // ExecutePrompt implements cron.AgentExecutor — sends a prompt to an agent session
-// using the non-streaming Agent Loop. Used by the Scheduler for cron/at task execution.
+// using the Agent Loop with streaming via SessionBus. Used by the Scheduler for cron/at task execution.
+// Events are published to the EventHub so that SSE subscribers (frontend) can see cron results in real-time.
 func (m *Manager) ExecutePrompt(ctx context.Context, agentID, sessionID, prompt string) error {
 	ag, err := m.store.GetAgent(agentID)
 	if err != nil {
@@ -659,7 +669,12 @@ func (m *Manager) ExecutePrompt(ctx context.Context, agentID, sessionID, prompt 
 		return fmt.Errorf("agent %s has no router available", agentID)
 	}
 
-	// If no sessionID, create a new session
+	// Generate turn_id for this execution (v0.3.3)
+	turnID := fmt.Sprintf("turn_%d", time.Now().UnixNano())
+
+	// If no sessionID, create a new session and broadcast session_created.
+	// If sessionID is provided but the session was deleted, recreate it so the cron job can continue.
+	isNewSession := false
 	if sessionID == "" {
 		now := time.Now()
 		sess := &Session{
@@ -673,7 +688,37 @@ func (m *Manager) ExecutePrompt(ctx context.Context, agentID, sessionID, prompt 
 			return fmt.Errorf("create session: %w", err)
 		}
 		sessionID = sess.ID
+		isNewSession = true
+	} else if _, err := m.store.GetSession(sessionID); err != nil {
+		// Session was deleted — recreate it with the same ID so the cron job reference stays valid
+		slog.Warn("fixed session deleted, recreating", "session_id", sessionID)
+		now := time.Now()
+		sess := &Session{
+			ID:        sessionID,
+			AgentID:   agentID,
+			Title:     fmt.Sprintf("定时任务: %s", truncateStr(prompt, 20)),
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := m.store.CreateSession(sess); err != nil {
+			return fmt.Errorf("recreate session: %w", err)
+		}
+		isNewSession = true
 	}
+
+	// Broadcast session_created via GlobalBus (so frontend can refresh session list)
+	if isNewSession {
+		m.eventHub.Global().Publish(AgentEvent{
+			Type:    "session_created",
+			AgentID: agentID,
+			Data: map[string]string{
+				"session_id": sessionID,
+			},
+		})
+	}
+
+	// Get or create SessionBus for streaming events
+	sessionBus := m.eventHub.GetOrCreateSessionBus(sessionID)
 
 	// Load conversation history for the session
 	dbMessages, err := m.store.ListMessagesBySession(sessionID)
@@ -711,12 +756,23 @@ func (m *Manager) ExecutePrompt(ctx context.Context, agentID, sessionID, prompt 
 		slog.Error("failed to save cron user message", "err", err)
 	}
 
+	// Publish user_message event to SessionBus (v0.3.3)
+	sessionBus.Publish(StreamEvent{
+		Type:   "user_message",
+		TurnID: turnID,
+		Data: UserMessageEvent{
+			TurnID:  turnID,
+			ID:      userMsg.ID,
+			Content: userMsg.Content,
+		},
+	})
+
 	history = append(history, llm.ChatMessage{
 		Role:    "user",
 		Content: llm.Content{llm.NewTextContent(prompt)},
 	})
 
-	// Build LoopConfig with non-streaming persistence
+	// Build LoopConfig with streaming via SessionBus for real-time frontend updates
 	loopCfg := LoopConfig{
 		LLMClient:    m.GetLLMClientForAgent(ag),
 		Router:       router,
@@ -748,7 +804,10 @@ func (m *Manager) ExecutePrompt(ctx context.Context, agentID, sessionID, prompt 
 	// Inject agentID into context for builtin tools
 	ctx = context.WithValue(ctx, AgentIDContextKey, agentID)
 
-	_, _, err = RunLoopNonStream(ctx, loopCfg, history)
+	// Run with streaming — events are published to SessionBus for SSE subscribers
+	_, _, err = RunLoop(ctx, loopCfg, history, func(event StreamEvent) {
+		sessionBus.Publish(event)
+	}, turnID)
 	return err
 }
 
