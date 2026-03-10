@@ -7,6 +7,8 @@
 <!-- 截图：主界面全貌，左侧 Agent/Session 列表 + 中间对话区 + 右侧桌面预览和文件树 -->
 ![主界面](docs/screenshots/main-ui.png)
 
+<video src="docs/screenshots/main-video.mp4" autoplay loop muted playsinline width="100%"></video>
+
 ---
 
 ## 为什么选择 SeaTurt？

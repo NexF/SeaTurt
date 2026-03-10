@@ -36,6 +36,9 @@ venv/
 # Config (may contain secrets)
 seaturt-server/config.yaml
 
+# Version docs (internal planning, not for public repo)
+docs/v*/
+
 # Temp
 *.tmp
 *.log
