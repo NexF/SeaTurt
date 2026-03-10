@@ -91,7 +91,6 @@ cd seaturt-<version>-<os>-<arch>
 打开浏览器访问 **http://localhost:8080** 即可开始使用。
 
 <!-- 截图：macOS 终端中 install.sh 的运行过程，展示各步骤的绿色勾号 -->
-![macOS 安装过程](docs/screenshots/install-process-mac.png)
 
 > **支持**：macOS (Apple Silicon / Intel)、Ubuntu / Debian / CentOS / Fedora
 
@@ -114,7 +113,6 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 > ⚠️ 首次安装 WSL2 需要**重启系统**，重启后再次运行 `install.ps1` 即可继续。
 
 <!-- 截图：Windows PowerShell 中 install.ps1 的运行过程 -->
-![Windows 安装过程](docs/screenshots/install-process-win.png)
 
 安装完成后，同样访问 **http://localhost:8080** 使用。
 
@@ -221,6 +219,14 @@ SeaTurt Server ─── 管理多个 Agent
 | [Docker 容器](docs/docker.md) | 网络模式、端口映射、镜像策略 |
 | [MCP 通信](docs/mcp.md) | MCP 协议、工具发现、执行机制 |
 | [容器安全](docs/container.md) | 镜像设计、安全措施、隔离策略 |
+
+---
+
+## Roadmap
+
+- [ ] 🧠 记忆系统 — Agent 能记住历史对话和用户偏好，跨 Session 持续学习
+- [ ] 🛒 技能 (MCP) 商店 — 一键安装社区共享的 MCP 技能包，扩展 Agent 能力
+- [ ] 🤝 多 Agent 通信 — 多个 Agent 之间协作通信，协同完成复杂任务
 
 ---
 
