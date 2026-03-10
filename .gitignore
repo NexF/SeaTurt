@@ -34,7 +34,7 @@ venv/
 **/mcp-servers/**/*.spec
 
 # Config (may contain secrets)
-# seaturt-server/config.yaml
+seaturt-server/config.yaml
 
 # Temp
 *.tmp

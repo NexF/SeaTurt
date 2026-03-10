@@ -1,0 +1,62 @@
+server_port: 8080
+log_level: debug
+docker_host: unix:///var/run/docker.sock
+sandbox_image: seaturt/sandbox:latest
+workspace_root: ~/.seaturt/workspaces
+db_path: ~/.seaturt/data.db
+default_provider: gongfeng
+default_model: auto
+
+providers:
+  example:
+    base_url: https://copilot.code.com/server/copilot-gateway/v1
+    api: openai-completions
+    api_key: example-api-key
+    models:
+      - id: auto
+        name: auto
+        reasoning: false
+        input: [text, image]
+        context_window: 120000
+        max_tokens: 8000
+        headers:
+          Accept: "text/event-stream, application/json"
+          X-Username: <your-username>
+          OAUTH-TOKEN: <your-oauth-token>
+          DEVICE-ID: <your-device-id>
+        cost:
+          input: 0
+          output: 0
+          cache_read: 0
+          cache_write: 0
+
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    api: openai-completions
+    api_key: <your-deepseek-api-key>
+    models:
+      - id: deepseek-chat
+        name: DeepSeek V3
+        reasoning: false
+        input: [text]
+        context_window: 64000
+        max_tokens: 8192
+      - id: deepseek-reasoner
+        name: DeepSeek R1
+        reasoning: true
+        input: [text]
+        context_window: 64000
+        max_tokens: 8192
+
+default_mcp_servers:
+  - name: core
+    command: mcp-server-core
+  - name: desktop
+    command: mcp-server-desktop
+  - name: browser
+    command: mcp-server-browser
+
+command_timeout: 300
+
+container:
+  shm_size: 2147483648

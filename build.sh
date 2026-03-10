@@ -131,10 +131,12 @@ build_server() {
     CGO_ENABLED=0 GOOS="$BUILD_OS" GOARCH="$BUILD_ARCH" \
         go build -ldflags="-s -w" -o "$BUILD_DIR/seaturt${EXT}" ./cmd/server/
 
-    # Copy config.yaml if exists
-    if [[ -f "$SERVER_DIR/config.yaml" ]]; then
-        cp "$SERVER_DIR/config.yaml" "$BUILD_DIR/config.yaml"
-        echo "    Config copied → $BUILD_DIR/config.yaml"
+    # Copy config.yaml.example as template (never ship real config with secrets)
+    if [[ -f "$SERVER_DIR/config.yaml.example" ]]; then
+        cp "$SERVER_DIR/config.yaml.example" "$BUILD_DIR/config.yaml"
+        echo "    Config template copied → $BUILD_DIR/config.yaml"
+    else
+        log_warn "config.yaml.example not found, skipping config copy"
     fi
 
     # Copy Docker sandbox files into release dir
