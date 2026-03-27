@@ -18,10 +18,11 @@ Agent Loop
 
 | MCP Server | 语言 | 默认启用 | 说明 | 文档 |
 |------------|------|---------|------|------|
-| **mcp-server-core** | Go | ✅ 是 | 基础 Shell/文件操作 | [core.md](./core.md) |
-| **mcp-server-desktop** | Go | ✅ 是（桌面 Agent） | X11 桌面 GUI 操作 | [desktop.md](./desktop.md) |
-| **mcp-server-browser** | Go + Node.js | ✅ 是（桌面 Agent） | Chromium 浏览器自动化 | [browser.md](./browser.md) |
-| **mcp-server-search** | Python | ✅ 是 | 网页搜索与内容抓取 | [search.md](./search.md) |
+| **mcp-server-core** | Go | ✅ 是 | 基础 Shell/文件操作 | [core/README.md](./core/README.md) |
+| **mcp-server-desktop** | Go | ✅ 是（桌面 Agent） | X11 桌面 GUI 操作 | [desktop/README.md](./desktop/README.md) |
+| **mcp-server-browser** | Go + Node.js | ✅ 是（桌面 Agent） | Chromium 浏览器自动化 | [browser/README.md](./browser/README.md) |
+| **mcp-server-search** | Python | ✅ 是 | 网页搜索与内容抓取 | [search/README.md](./search/README.md) |
+| **mcp-server-wechat** | Python | ❌ 否（手动启用） | 微信自动化（AT-SPI2 + DB） | [wechat/README.md](./wechat/README.md)（待补充） |
 
 ## 通用协议
 
@@ -41,15 +42,23 @@ LLM 看到的 tool 名称格式为 `{mcpname}-{toolname}`，例如：
 - `desktop-screenshot` — desktop server 的 screenshot tool
 - `browser-open_browser` — browser server 的 open_browser tool
 - `search-web_search` — search server 的 web_search tool
+- `wechat-wechat_login` — wechat server 的 wechat_login tool
 
 Router 通过前缀将请求路由到对应的 MCP Server。
 
-## 源码位置
+## 目录结构
 
 ```
-seaturt-server/docker/sandbox/mcp-servers/
+mcp-servers/
+├── README.md      # 本文件（总览）
 ├── core/          # mcp-server-core (Go)
+│   └── README.md
 ├── desktop/       # mcp-server-desktop (Go)
+│   └── README.md
 ├── browser/       # mcp-server-browser (Go proxy + Node.js daemon)
-└── search/        # mcp-server-search (Python, PyInstaller 打包)
+│   └── README.md
+├── search/        # mcp-server-search (Python, PyInstaller 打包)
+│   └── README.md
+└── wechat/        # mcp-server-wechat (Python, AT-SPI2 + SQLCipher)
+    └── README.md  （待补充）
 ```

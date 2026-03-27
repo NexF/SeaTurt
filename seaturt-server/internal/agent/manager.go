@@ -224,6 +224,15 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		return nil, fmt.Errorf("create .seaturt dir: %w", err)
 	}
 
+	// Pre-create wechat session dir (symlink target in container).
+	// Must exist before svc-wechat-run starts, since the Docker image
+	// has /opt/mcp-servers/wechat/session → /workspace/.seaturt/wechat-session.
+	if hasMCPServer(mcpServers, "wechat") {
+		if err := os.MkdirAll(filepath.Join(seaturtDir, "wechat-session"), 0755); err != nil {
+			slog.Warn("failed to create wechat-session dir", "err", err)
+		}
+	}
+
 	ag := &Agent{
 		ID:            agentID,
 		Name:          req.Name,

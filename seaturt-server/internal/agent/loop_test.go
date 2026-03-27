@@ -125,7 +125,7 @@ func TestRunLoop_ContextAlreadyCancelled(t *testing.T) {
 	var events []StreamEvent
 	_, messages, err := RunLoop(ctx, cfg, history, func(event StreamEvent) {
 		events = append(events, event)
-	})
+	}, "")
 
 	// Should return cancelled error
 	require.Error(t, err)

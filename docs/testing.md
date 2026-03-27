@@ -232,6 +232,27 @@ defer mockServer.Close()
 | E2E-04 | `TestE2E_SSEFormatValidation` | SSE 原始格式 + Content-Type charset 验证 |
 | E2E-05 | `TestE2E_ConfigLoading` | config.yaml 加载 + 路径展开验证 |
 
+### WeChat MCP 集成测试（v0.3.5）
+
+| 编号 | 测试函数 | 场景 |
+|------|---------|------|
+| IT-50 | `TestWeChatMCP_WrapperExists` | wrapper script 存在且可执行（staging + tools dir） |
+| IT-51 | `TestWeChatMCP_WrapperContent` | wrapper 内容正确（bash shebang + 绝对路径 + 环境变量） |
+| IT-52 | `TestWeChatMCP_PythonCodeInstalled` | Python 代码预装在 /opt/mcp-servers/wechat/ |
+| IT-53 | `TestWeChatMCP_SessionSymlink` | session 目录符号链接指向 workspace bind mount |
+| IT-54 | `TestWeChatMCP_Initialize` | MCP initialize 握手成功（需桌面环境，否则 SKIP） |
+| IT-55 | `TestWeChatMCP_ToolsList` | tools/list 返回全部 11 个 wechat 工具 |
+| IT-56 | `TestWeChatMCP_DiscoverAndRegister` | 完整发现流程：copy binary → discover → YAML → registry → router |
+
+### WeChat Python 单元测试
+
+| 文件 | 场景 |
+|------|------|
+| `test_db_query_unit.py` | 消息类型解析、XML 解析、时间解析、方向解析、zstd 解压、DB 状态机、db_utils |
+| `test_mcp_protocol.py` | MCP JSON-RPC 协议层（initialize / tools/list / 错误处理，需桌面环境） |
+| `test_ui.py` | WeChatUI 操控验证（需微信运行 + 已登录，手工验收） |
+| `test_send.py` | 消息发送全流程验证（需微信运行 + 已登录，手工验收） |
+
 ### 待实现（Phase 2）
 
 | 编号 | 场景 |

@@ -57,7 +57,7 @@ func TestAgentLoop(t *testing.T) {
 	var events []agent.StreamEvent
 	finalContent, messages, err := agent.RunLoop(context.Background(), loopCfg, history, func(event agent.StreamEvent) {
 		events = append(events, event)
-	})
+	}, "")
 	require.NoError(t, err)
 
 	// Verify final content
@@ -129,7 +129,7 @@ func TestAgentLoopMultipleTools(t *testing.T) {
 		{Role: "user", Content: llm.Content{llm.NewTextContent("Write and then read a file")}},
 	}
 
-	finalContent, _, err := agent.RunLoop(context.Background(), loopCfg, history, nil)
+	finalContent, _, err := agent.RunLoop(context.Background(), loopCfg, history, nil, "")
 	require.NoError(t, err)
 	assert.Contains(t, finalContent, "loop test data")
 	assert.Equal(t, 3, mockServer.CallCount)
@@ -206,7 +206,7 @@ func TestAgentLoop_SingleToolCallCancel(t *testing.T) {
 	var events []agent.StreamEvent
 	finalContent, messages, err := agent.RunLoop(context.Background(), loopCfg, history, func(event agent.StreamEvent) {
 		events = append(events, event)
-	})
+	}, "")
 	require.NoError(t, err, "RunLoop should succeed (single tool cancel doesn't abort chat)")
 
 	// Verify final content came from the second LLM response

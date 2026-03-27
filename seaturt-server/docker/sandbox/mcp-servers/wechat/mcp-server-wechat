@@ -1,0 +1,35 @@
+#!/bin/bash
+# mcp-server-wechat — wrapper script for WeChat MCP Server
+#
+# This script is the entry point that the Executor calls via `docker exec`.
+# It delegates to main.py which implements the full MCP JSON-RPC stdio protocol.
+#
+# Why a wrapper instead of PyInstaller?
+#   WeChat MCP depends on system packages (gi.repository.Atspi, pysqlcipher3)
+#   that don't package well with PyInstaller. A simple wrapper is more reliable.
+#
+# Environment setup:
+#   - Reads D-Bus session address from /tmp/wechat-dbus-addr (persisted by svc-wechat)
+#   - Sets DISPLAY for AT-SPI2 communication with the WeChat GUI
+#   - Sets QT_ACCESSIBILITY for WeChat's Qt accessibility bridge
+#
+# NOTE: This wrapper uses an absolute path to /opt/mcp-servers/wechat/ because
+# it may be invoked from a different directory (e.g. /workspace/.seaturt/tools/)
+# after being copied there by loadMCPServers(). The Python code + deps are always
+# pre-installed in the Docker image at /opt/mcp-servers/wechat/.
+
+WECHAT_MCP_DIR="/opt/mcp-servers/wechat"
+
+# Load D-Bus session address (written by wechat_launcher.py / svc-wechat)
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && [ -f /tmp/wechat-dbus-addr ]; then
+    export DBUS_SESSION_BUS_ADDRESS="$(cat /tmp/wechat-dbus-addr)"
+fi
+
+# Ensure DISPLAY is set (AT-SPI2 needs it to communicate with WeChat GUI)
+export DISPLAY="${DISPLAY:-:1}"
+
+# Qt accessibility must be enabled for AT-SPI2 to see WeChat controls
+export QT_ACCESSIBILITY=1
+export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+
+exec python3 "$WECHAT_MCP_DIR/main.py"

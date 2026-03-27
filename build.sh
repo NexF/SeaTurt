@@ -140,11 +140,22 @@ build_server() {
     fi
 
     # Copy Docker sandbox files into release dir
+    # The Dockerfile references: svc-selkies-run, svc-browser-daemon-run,
+    # svc-wechat-run, mcp-servers/browser/, mcp-servers/wechat/
     local DOCKER_SRC="$SERVER_DIR/docker/sandbox"
     local DOCKER_DST="$BUILD_DIR/docker"
     mkdir -p "$DOCKER_DST"
     cp "$DOCKER_SRC/Dockerfile" "$DOCKER_DST/Dockerfile"
-    cp "$DOCKER_SRC/svc-selkies-run" "$DOCKER_DST/svc-selkies-run"
+    # s6 service scripts
+    for svc in svc-selkies-run svc-browser-daemon-run svc-wechat-run; do
+        if [[ -f "$DOCKER_SRC/$svc" ]]; then
+            cp "$DOCKER_SRC/$svc" "$DOCKER_DST/$svc"
+        fi
+    done
+    # mcp-servers directories (browser daemon + wechat code/deps)
+    if [[ -d "$DOCKER_SRC/mcp-servers" ]]; then
+        cp -r "$DOCKER_SRC/mcp-servers" "$DOCKER_DST/mcp-servers"
+    fi
     echo "    Docker files copied → $DOCKER_DST/"
 
     # Copy prompts directory
@@ -214,6 +225,18 @@ build_mcp() {
         [ -f "$dir/requirements.txt" ] || continue
         [ -f "$dir/go.mod" ] && continue  # skip Go projects (already built above)
         name=$(basename "$dir")
+
+        # Check for a pre-built wrapper script (used when PyInstaller won't work
+        # due to system dependencies like gi.repository.Atspi, pysqlcipher3, etc.)
+        # The wrapper is a bash script that sets up env and execs python3 main.py.
+        # Python deps + code are pre-installed in the Docker image via Dockerfile.
+        if [[ -f "$dir/mcp-server-$name" ]]; then
+            echo "    -> mcp-server-$name (wrapper script, skip PyInstaller)"
+            cp "$dir/mcp-server-$name" "$MCP_BINS_DIR/mcp-server-$name"
+            chmod +x "$MCP_BINS_DIR/mcp-server-$name"
+            continue
+        fi
+
         echo "    -> mcp-server-$name (python/pyinstaller)"
 
         if [[ "$NEED_DOCKER_BUILD" == "true" ]]; then

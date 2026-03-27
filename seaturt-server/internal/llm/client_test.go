@@ -57,7 +57,7 @@ func TestConsumeSSE_DataWithSpace(t *testing.T) {
 	)
 
 	client := NewClient("http://test", "key", "model", "", nil, nil)
-	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
+	resp, err := client.consumeSSE(strings.NewReader(stream), nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Hello", resp.Choices[0].Message.Content.String())
@@ -76,7 +76,7 @@ func TestConsumeSSE_DataWithoutSpace(t *testing.T) {
 	)
 
 	client := NewClient("http://test", "key", "model", "", nil, nil)
-	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
+	resp, err := client.consumeSSE(strings.NewReader(stream), nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Hello", resp.Choices[0].Message.Content.String())
@@ -96,7 +96,7 @@ func TestConsumeSSE_ChineseUTF8Content(t *testing.T) {
 	)
 
 	client := NewClient("http://test", "key", "model", "", nil, nil)
-	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
+	resp, err := client.consumeSSE(strings.NewReader(stream), nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, chineseText, resp.Choices[0].Message.Content.String())
@@ -118,7 +118,7 @@ func TestConsumeSSE_MultipleDeltas(t *testing.T) {
 	)
 
 	client := NewClient("http://test", "key", "model", "", nil, nil)
-	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
+	resp, err := client.consumeSSE(strings.NewReader(stream), nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Hello World!", resp.Choices[0].Message.Content.String())
@@ -159,7 +159,7 @@ func TestConsumeSSE_ToolCalls(t *testing.T) {
 	)
 
 	client := NewClient("http://test", "key", "model", "", nil, nil)
-	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
+	resp, err := client.consumeSSE(strings.NewReader(stream), nil, nil)
 	require.NoError(t, err)
 
 	require.Len(t, resp.Choices[0].Message.ToolCalls, 1)
@@ -182,7 +182,7 @@ func TestConsumeSSE_IgnoresNonDataLines(t *testing.T) {
 	)
 
 	client := NewClient("http://test", "key", "model", "", nil, nil)
-	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
+	resp, err := client.consumeSSE(strings.NewReader(stream), nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Hello", resp.Choices[0].Message.Content.String())
@@ -203,7 +203,7 @@ func TestConsumeSSE_StreamCallback(t *testing.T) {
 	resp, err := client.consumeSSE(strings.NewReader(stream), func(delta StreamDelta) error {
 		callbackCount++
 		return nil
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Hi", resp.Choices[0].Message.Content.String())
@@ -217,7 +217,7 @@ func TestConsumeSSE_EmptyStream(t *testing.T) {
 	)
 
 	client := NewClient("http://test", "key", "model", "", nil, nil)
-	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
+	resp, err := client.consumeSSE(strings.NewReader(stream), nil, nil)
 	require.NoError(t, err)
 
 	assert.Empty(t, resp.Choices[0].Message.Content.String())
@@ -237,7 +237,7 @@ func TestConsumeSSE_MixedSpaceFormats(t *testing.T) {
 	)
 
 	client := NewClient("http://test", "key", "model", "", nil, nil)
-	resp, err := client.consumeSSE(strings.NewReader(stream), nil)
+	resp, err := client.consumeSSE(strings.NewReader(stream), nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Part1Part2", resp.Choices[0].Message.Content.String())

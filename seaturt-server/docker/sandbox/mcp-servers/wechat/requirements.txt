@@ -1,0 +1,17 @@
+# AT-SPI2 dependencies (system packages, not pip):
+#   apt-get install -y at-spi2-core gir1.2-atspi-2.0 python3-gi
+#
+# ⚠️ Do NOT use python3-pyatspi — Ubuntu 24.04 uses gi.repository.Atspi (GI bindings)
+#    which has different API signatures from the old pyatspi module.
+#
+# DB 解密 dependencies (system packages, not pip):
+#   apt-get install -y gcc libsqlcipher-dev python3-dev
+#
+# PyInstaller for packaging daemon into a single binary
+pyinstaller>=6.0
+
+# P2.0: DB 解密 — SQLCipher Python 绑定
+pysqlcipher3>=1.2.0
+
+# P2.0: WCDB 压缩内容解压 (WCDB_CT=4 时 message_content 需 zstd 解压)
+zstandard>=0.22.0

@@ -242,6 +242,53 @@ func createTestRouter(t *testing.T, containerID, workspacePath string) *mcp.Rout
 	return mcp.NewRouter(registry, executor)
 }
 
+// writeDiscoveredYAML writes a discovered MCP server's tools as YAML to the tools dir.
+// This is extracted from createTestContainer for reuse by individual tests.
+func writeDiscoveredYAML(t *testing.T, toolsDir, serverName, command string,
+	initResult *mcp.InitializeResult, tools []mcp.ToolDefinition) {
+	t.Helper()
+
+	type yamlTool struct {
+		Name        string         `yaml:"name"`
+		Description string         `yaml:"description"`
+		InputSchema map[string]any `yaml:"inputSchema,omitempty"`
+	}
+	type yamlServer struct {
+		Name        string     `yaml:"name"`
+		Command     string     `yaml:"command"`
+		Description string     `yaml:"description"`
+		Enabled     bool       `yaml:"enabled"`
+		Tools       []yamlTool `yaml:"tools"`
+	}
+
+	desc := ""
+	if initResult != nil {
+		desc = initResult.ServerInfo.Name
+	}
+
+	ysd := yamlServer{
+		Name:        serverName,
+		Command:     command,
+		Description: desc,
+		Enabled:     true,
+		Tools:       make([]yamlTool, 0, len(tools)),
+	}
+	for _, tool := range tools {
+		schema, _ := tool.InputSchema.(map[string]any)
+		ysd.Tools = append(ysd.Tools, yamlTool{
+			Name:        tool.Name,
+			Description: tool.Description,
+			InputSchema: schema,
+		})
+	}
+
+	data, _ := yaml.Marshal(ysd)
+	yamlPath := filepath.Join(toolsDir, serverName+".yaml")
+	if err := os.WriteFile(yamlPath, data, 0644); err != nil {
+		t.Fatalf("failed to write YAML for %s: %v", serverName, err)
+	}
+}
+
 // cleanupTestContainers removes any leftover test containers.
 func cleanupTestContainers() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

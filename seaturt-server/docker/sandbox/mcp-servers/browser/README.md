@@ -111,20 +111,73 @@ closed ──── open_browser ───→ open
 
 ### Playwright Tools（动态发现）
 
-Daemon 启动时通过 **tools discovery** 机制从 `@playwright/mcp` 获取完整 tool 列表。这些 tool 由 Playwright 官方提供，包括但不限于：
+Daemon 启动时通过 **tools discovery** 机制从 `@playwright/mcp` 获取完整 tool 列表。以下为 `@playwright/mcp@0.0.68` 提供的所有 tools：
 
-- `browser_navigate` — 导航到 URL
-- `browser_click` — 点击页面元素
-- `browser_type` — 在输入框中输入文本
-- `browser_screenshot` — 页面截图
-- `browser_pdf_save` — 保存页面为 PDF
-- `browser_tab_list` — 列出标签页
-- `browser_tab_new` — 新开标签页
-- `browser_tab_select` — 切换标签页
-- `browser_tab_close` — 关闭标签页
-- ... 等更多
+#### 核心自动化
 
-> 完整 tool 列表取决于 `@playwright/mcp` 的版本和启用的 caps。
+| Tool | 说明 |
+|------|------|
+| `browser_navigate` | 导航到指定 URL |
+| `browser_navigate_back` | 返回上一页（浏览器历史记录） |
+| `browser_click` | 点击页面元素 |
+| `browser_hover` | 鼠标悬停在页面元素上 |
+| `browser_drag` | 在两个元素之间执行拖放操作 |
+| `browser_type` | 在可编辑元素中输入文本 |
+| `browser_select_option` | 在下拉菜单中选择选项 |
+| `browser_fill_form` | 批量填充多个表单字段 |
+| `browser_press_key` | 按下键盘按键 |
+| `browser_file_upload` | 上传一个或多个文件 |
+| `browser_handle_dialog` | 处理对话框（alert / confirm / prompt） |
+| `browser_snapshot` | 捕获页面可访问性快照（推荐用于后续操作定位） |
+| `browser_take_screenshot` | 对当前页面截图（仅供查看，不可基于截图执行操作） |
+| `browser_evaluate` | 在页面中执行 JavaScript 表达式 |
+| `browser_run_code` | 运行 Playwright 代码片段 |
+| `browser_wait_for` | 等待文本出现/消失，或等待指定时间 |
+| `browser_close` | 关闭当前页面 |
+| `browser_resize` | 调整浏览器窗口大小 |
+| `browser_console_messages` | 返回所有控制台消息 |
+| `browser_network_requests` | 返回页面加载以来的所有网络请求 |
+
+#### 标签页管理
+
+| Tool | 说明 |
+|------|------|
+| `browser_tabs` | 列出、创建、关闭或切换浏览器标签页 |
+
+#### 浏览器安装
+
+| Tool | 说明 |
+|------|------|
+| `browser_install` | 安装配置中指定的浏览器（遇到浏览器未安装错误时调用） |
+
+#### 基于坐标的操作（需启用 `--caps=vision`）
+
+| Tool | 说明 |
+|------|------|
+| `browser_mouse_click_xy` | 在给定坐标点击鼠标左键 |
+| `browser_mouse_move_xy` | 将鼠标移动到给定坐标 |
+| `browser_mouse_drag_xy` | 按住鼠标左键拖动到给定坐标 |
+| `browser_mouse_down` | 按下鼠标 |
+| `browser_mouse_up` | 松开鼠标 |
+| `browser_mouse_wheel` | 滚动鼠标滚轮 |
+
+#### PDF 生成（需启用 `--caps=pdf`）
+
+| Tool | 说明 |
+|------|------|
+| `browser_pdf_save` | 将页面保存为 PDF 文件 |
+
+#### 测试断言（需启用 `--caps=testing`）
+
+| Tool | 说明 |
+|------|------|
+| `browser_generate_locator` | 为给定元素生成 Playwright 定位符（测试用） |
+| `browser_verify_element_visible` | 验证元素在页面上是否可见 |
+| `browser_verify_list_visible` | 验证列表在页面上是否可见 |
+| `browser_verify_text_visible` | 验证文本在页面上是否可见 |
+| `browser_verify_value` | 验证元素的值 |
+
+> 实际可用的 tools 取决于 `@playwright/mcp` 版本和启动时通过 `--caps` 参数启用的能力集。当前 daemon 默认启用 `--caps=vision,pdf`，未启用 `testing`。
 
 ### Tool Discovery 机制
 
@@ -143,10 +196,18 @@ Daemon 启动时通过 **tools discovery** 机制从 `@playwright/mcp` 获取完
 
 ## LLM 看到的 Tool 名称
 
+所有 tool 在注册到 Agent 时会加上 `browser-` 前缀，以区分不同 MCP Server 的同名工具：
+
 | LLM 调用名 | 实际 Tool |
 |-----------|----------|
-| `browser-open_browser` | `open_browser` |
-| `browser-close_browser` | `close_browser` |
+| `browser-open_browser` | `open_browser`（自定义） |
+| `browser-close_browser` | `close_browser`（自定义） |
 | `browser-browser_navigate` | `browser_navigate`（Playwright） |
 | `browser-browser_click` | `browser_click`（Playwright） |
-| ... | ...（所有 Playwright tools 都加 `browser-` 前缀） |
+| `browser-browser_type` | `browser_type`（Playwright） |
+| `browser-browser_snapshot` | `browser_snapshot`（Playwright） |
+| `browser-browser_take_screenshot` | `browser_take_screenshot`（Playwright） |
+| `browser-browser_tabs` | `browser_tabs`（Playwright） |
+| `browser-browser_pdf_save` | `browser_pdf_save`（Playwright） |
+| `browser-browser_mouse_click_xy` | `browser_mouse_click_xy`（Playwright, vision） |
+| ... | ...（所有 Playwright tools 均加 `browser-` 前缀） |

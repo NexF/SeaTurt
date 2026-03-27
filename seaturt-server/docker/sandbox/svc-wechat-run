@@ -1,0 +1,25 @@
+#!/usr/bin/with-contenv bash
+# s6 longrun service: WeChat launcher
+#
+# Waits for desktop environment (X11 DISPLAY=:1), then delegates to
+# wechat_launcher.py which handles:
+#   1. D-Bus session bus discovery/creation
+#   2. AT-SPI2 registryd startup
+#   3. WeChat binary detection and launch (foreground, exec)
+#
+# If WeChat is not installed, the launcher will poll until it appears.
+# main.py (MCP Server) is NOT managed by s6 — it is invoked per-request
+# via `docker exec python3 /opt/mcp-servers/wechat/main.py`.
+
+# Wait for desktop to be ready (same pattern as svc-browser-daemon-run)
+until [ -f /defaults/pid ]; do
+  sleep .5
+done
+
+export DISPLAY=:1
+
+# Ensure session directory exists (persisted via workspace bind mount)
+# This is the actual directory that /opt/mcp-servers/wechat/session symlinks to.
+mkdir -p /workspace/.seaturt/wechat-session
+
+exec python3 /opt/mcp-servers/wechat/wechat_launcher.py --daemon
