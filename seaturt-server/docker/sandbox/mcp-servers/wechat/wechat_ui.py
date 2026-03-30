@@ -1546,9 +1546,106 @@ class WeChatUI:
             return False
         return self._set_text(chat_input, "")
 
+    def _get_wechat_window_id(self) -> Optional[str]:
+        """
+        获取微信主窗口的 X11 Window ID。
+
+        微信 Linux 版的窗口情况：
+        - 主窗口标题: "Weixin"（这是真正的 GUI 窗口）
+        - Qt 辅助窗口: "Qt Selection Owner for wechat"（剪贴板相关，不可见）
+        - 其他辅助窗口: "wechat"（不可见）
+
+        策略（按优先级）：
+        1. wmctrl -l 列出所有窗口，精确匹配 "Weixin"（最可靠）
+        2. xdotool search --name 搜索候选名称，过滤掉 Qt 辅助窗口
+
+        Returns:
+            窗口 ID 字符串（十进制），未找到返回 None
+        """
+        display = os.environ.get("DISPLAY", ":1")
+        env = {**os.environ, "DISPLAY": display}
+
+        # 策略 1: wmctrl -l 精确匹配（最可靠）
+        # wmctrl 只列出真正的顶层窗口，不会包含 Qt 辅助窗口
+        try:
+            result = subprocess.run(
+                ["wmctrl", "-l"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().splitlines():
+                    # wmctrl -l 输出格式: 0x00c00006  0 hostname Weixin
+                    parts = line.split(None, 3)
+                    if len(parts) >= 4:
+                        window_title = parts[3]
+                        if window_title.strip() in ("Weixin", "WeChat", "微信", "wechat"):
+                            hex_id = parts[0]
+                            # 转为十进制（xdotool / import 都接受十进制）
+                            wid = str(int(hex_id, 16))
+                            logger.debug(f"找到微信主窗口（wmctrl）: {wid} (title='{window_title}')")
+                            return wid
+        except FileNotFoundError:
+            logger.debug("wmctrl 未安装，跳过策略 1")
+        except Exception as e:
+            logger.debug(f"wmctrl -l 失败: {e}")
+
+        # 策略 2: xdotool search --name，但过滤掉 Qt 辅助窗口
+        # 候选名列表，优先搜 "Weixin"（Linux 版微信主窗口的实际标题）
+        candidate_names = ["Weixin", "WeChat", "wechat", "微信"]
+
+        for search_name in candidate_names:
+            try:
+                result = subprocess.run(
+                    ["xdotool", "search", "--name", search_name],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    window_ids = result.stdout.strip().splitlines()
+                    for wid_str in window_ids:
+                        wid = wid_str.strip()
+                        if not wid:
+                            continue
+                        # 验证：获取窗口名，过滤掉 Qt 辅助窗口
+                        try:
+                            name_result = subprocess.run(
+                                ["xdotool", "getwindowname", wid],
+                                env=env,
+                                capture_output=True,
+                                text=True,
+                                timeout=3,
+                            )
+                            if name_result.returncode == 0:
+                                win_name = name_result.stdout.strip()
+                                # 排除 Qt 辅助窗口（如 "Qt Selection Owner for wechat"）
+                                if "Qt Selection Owner" in win_name:
+                                    logger.debug(f"跳过 Qt 辅助窗口: {wid} (name='{win_name}')")
+                                    continue
+                                logger.debug(f"找到微信窗口（xdotool）: {wid} (name='{win_name}')")
+                                return wid
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.debug(f"xdotool search --name '{search_name}' 失败: {e}")
+
+        logger.warning("未找到微信主窗口（wmctrl 和 xdotool 均未匹配）")
+        return None
+
     def take_screenshot(self, output_path: str = "/tmp/wechat-screenshot.png") -> Optional[str]:
         """
-        通过 scrot 截取微信窗口截图。
+        截取微信窗口截图。
+
+        策略（按优先级）：
+        1. 通过 xdotool 找到微信窗口 → import -window 截取该窗口
+        2. 通过 xdotool 聚焦微信窗口 → scrot -u 截取聚焦窗口
+
+        注意：不做全屏 fallback。如果找不到微信窗口，说明 X11/AT-SPI2 环境
+        有问题，应尽早暴露错误，而不是返回一个无用的全屏截图掩盖问题。
 
         Args:
             output_path: 截图保存路径
@@ -1556,23 +1653,102 @@ class WeChatUI:
         Returns:
             截图文件路径，失败返回 None
         """
+        display = os.environ.get("DISPLAY", ":1")
+        env = {**os.environ, "DISPLAY": display}
+
+        window_id = self._get_wechat_window_id()
+        if not window_id:
+            logger.error(
+                "无法定位微信窗口（xdotool search 未找到），"
+                "请检查：1) 微信进程是否正在运行 "
+                "2) DISPLAY 环境变量是否正确 "
+                "3) X11/AT-SPI2 环境是否正常"
+            )
+            return None
+
+        # 策略 1: import -window（ImageMagick）精确截取指定窗口
         try:
-            # 用 scrot 截取整个 Xvfb 屏幕
             result = subprocess.run(
-                ["scrot", output_path],
-                env={"DISPLAY": ":1"},
+                ["import", "-window", window_id, output_path],
+                env=env,
                 capture_output=True,
                 timeout=10,
             )
-            if result.returncode == 0:
-                logger.info(f"截图已保存: {output_path}")
+            if result.returncode == 0 and os.path.exists(output_path):
+                logger.info(f"窗口截图已保存（import -window）: {output_path}")
                 return output_path
-            else:
-                logger.error(f"截图失败: {result.stderr.decode()}")
-                return None
+            logger.debug(f"import -window 失败: rc={result.returncode}, stderr={result.stderr.decode()}")
+        except FileNotFoundError:
+            logger.debug("import 命令不可用（ImageMagick 未安装）")
         except Exception as e:
-            logger.error(f"截图异常: {e}")
+            logger.debug(f"import -window 异常: {e}")
+
+        # 策略 2: xdotool 聚焦 + scrot -u（聚焦窗口截图）
+        try:
+            subprocess.run(
+                ["xdotool", "windowactivate", "--sync", window_id],
+                env=env, capture_output=True, timeout=5,
+            )
+            time.sleep(0.3)
+            result = subprocess.run(
+                ["scrot", "-u", output_path],
+                env=env,
+                capture_output=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and os.path.exists(output_path):
+                logger.info(f"窗口截图已保存（scrot -u）: {output_path}")
+                return output_path
+            logger.debug(f"scrot -u 失败: rc={result.returncode}")
+        except Exception as e:
+            logger.debug(f"scrot -u 异常: {e}")
+
+        logger.error(
+            f"微信窗口已定位（wid={window_id}），但所有截图方式均失败。"
+            "请检查 ImageMagick（import）和 scrot 是否已安装。"
+        )
+        return None
+
+    def get_wechat_window_geometry(self) -> Optional[dict]:
+        """
+        获取微信窗口的位置和大小。
+
+        Returns:
+            dict with keys: x, y, width, height. 失败返回 None.
+        """
+        window_id = self._get_wechat_window_id()
+        if not window_id:
             return None
+
+        display = os.environ.get("DISPLAY", ":1")
+        env = {**os.environ, "DISPLAY": display}
+
+        try:
+            result = subprocess.run(
+                ["xdotool", "getwindowgeometry", "--shell", window_id],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                geo = {}
+                for line in result.stdout.strip().splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        geo[k.strip()] = int(v.strip())
+                # xdotool getwindowgeometry --shell 输出: WINDOW, X, Y, WIDTH, HEIGHT
+                if "WIDTH" in geo and "HEIGHT" in geo:
+                    return {
+                        "x": geo.get("X", 0),
+                        "y": geo.get("Y", 0),
+                        "width": geo["WIDTH"],
+                        "height": geo["HEIGHT"],
+                    }
+        except Exception as e:
+            logger.debug(f"获取窗口几何信息失败: {e}")
+
+        return None
 
     # ===================================================================
     # 调试工具

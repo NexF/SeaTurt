@@ -224,14 +224,10 @@ func (m *Manager) Create(ctx context.Context, req CreateAgentRequest) (*Agent, e
 		return nil, fmt.Errorf("create .seaturt dir: %w", err)
 	}
 
-	// Pre-create wechat session dir (symlink target in container).
-	// Must exist before svc-wechat-run starts, since the Docker image
-	// has /opt/mcp-servers/wechat/session → /workspace/.seaturt/wechat-session.
-	if hasMCPServer(mcpServers, "wechat") {
-		if err := os.MkdirAll(filepath.Join(seaturtDir, "wechat-session"), 0755); err != nil {
-			slog.Warn("failed to create wechat-session dir", "err", err)
-		}
-	}
+	// Deploy MCP server source code to workspace (first-time copy from release dir).
+	// This creates .seaturt/mcp-servers/wechat/ and .seaturt/mcp-servers/browser/
+	// with editable code + session/user-data directories.
+	m.deployMCPServers(workspacePath)
 
 	ag := &Agent{
 		ID:            agentID,
@@ -481,6 +477,8 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		}
 	}
 	// Re-load MCP servers (may have new bins since last start)
+	// Ensure MCP server source code is deployed to workspace (in case of first start after upgrade)
+	m.deployMCPServers(ag.WorkspacePath)
 	toolsDir := filepath.Join(ag.WorkspacePath, ".seaturt", "tools")
 	containerToolsDir := filepath.Join("/workspace", ".seaturt", "tools")
 	mcpBinsDir := m.cfg.GetMCPBinsDir()
@@ -907,6 +905,98 @@ func (m *Manager) GetMappedPorts(ctx context.Context, ag *Agent) (map[string]str
 // containerMCPDiscoverTimeout is the timeout for running tools/list on a single MCP server.
 // Browser MCP needs extra time: Go client retries socket connection + daemon spawns npx subprocess.
 const containerMCPDiscoverTimeout = 60 * time.Second
+
+// deployMCPServers copies MCP server source code from the release directory
+// to the agent's workspace/.seaturt/mcp-servers/. This is a first-time deployment:
+// if the target directories already contain files, they are left untouched
+// (allowing per-agent customization).
+//
+// Source: <serverDir>/mcp-servers/{wechat,browser}/
+// Target: <workspace>/.seaturt/mcp-servers/{wechat,browser}/
+func (m *Manager) deployMCPServers(workspacePath string) {
+	srcDir := m.cfg.GetMCPServersSourceDir()
+	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		slog.Debug("mcp-servers source dir not found, skipping deploy", "dir", srcDir)
+		return
+	}
+
+	// Deploy WeChat MCP server
+	wechatSrc := filepath.Join(srcDir, "wechat")
+	wechatDst := filepath.Join(workspacePath, ".seaturt", "mcp-servers", "wechat")
+	if err := os.MkdirAll(wechatDst, 0755); err != nil {
+		slog.Warn("failed to create wechat mcp dir", "err", err)
+	} else {
+		m.deploySingleMCPServer(wechatSrc, wechatDst, []string{
+			"main.py", "wechat_ui.py", "wechat_db.py", "wechat_db_query.py",
+			"wechat_launcher.py", "db_utils.py", "key_extract.py",
+			"key_extract_daemon.py",
+			"mcp-server-wechat", "requirements.txt",
+		})
+	}
+	// Ensure session dir exists
+	_ = os.MkdirAll(filepath.Join(wechatDst, "session"), 0755)
+
+	// Deploy Browser MCP server
+	browserSrc := filepath.Join(srcDir, "browser")
+	browserDst := filepath.Join(workspacePath, ".seaturt", "mcp-servers", "browser")
+	if err := os.MkdirAll(browserDst, 0755); err != nil {
+		slog.Warn("failed to create browser mcp dir", "err", err)
+	} else {
+		m.deploySingleMCPServer(browserSrc, browserDst, []string{
+			"server.js",
+		})
+	}
+	// Ensure user-data dir exists
+	_ = os.MkdirAll(filepath.Join(browserDst, "user-data"), 0755)
+}
+
+// deploySingleMCPServer copies specific files from srcDir to dstDir.
+// Only copies files that don't already exist in dstDir (first-time deploy).
+func (m *Manager) deploySingleMCPServer(srcDir, dstDir string, files []string) {
+	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		slog.Debug("MCP server source not found, skipping", "dir", srcDir)
+		return
+	}
+
+	deployed := 0
+	for _, fileName := range files {
+		srcPath := filepath.Join(srcDir, fileName)
+		dstPath := filepath.Join(dstDir, fileName)
+
+		// Skip if destination already exists (don't overwrite user edits)
+		if _, err := os.Stat(dstPath); err == nil {
+			continue
+		}
+
+		// Check source exists
+		srcInfo, err := os.Stat(srcPath)
+		if err != nil {
+			slog.Debug("MCP source file not found, skipping", "file", srcPath)
+			continue
+		}
+
+		// Copy file
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			slog.Warn("failed to read MCP source file", "file", srcPath, "err", err)
+			continue
+		}
+
+		if err := os.WriteFile(dstPath, data, srcInfo.Mode()); err != nil {
+			slog.Warn("failed to write MCP file to workspace", "file", dstPath, "err", err)
+			continue
+		}
+		deployed++
+	}
+
+	if deployed > 0 {
+		slog.Info("deployed MCP server to workspace",
+			"src", srcDir,
+			"dst", dstDir,
+			"files", deployed,
+		)
+	}
+}
 
 // loadMCPServers scans srcDir for MCP binaries/scripts, copies each to the container,
 // discovers tools via MCP protocol, and writes YAML files.

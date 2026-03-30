@@ -9,7 +9,9 @@
 #
 # If WeChat is not installed, the launcher will poll until it appears.
 # main.py (MCP Server) is NOT managed by s6 — it is invoked per-request
-# via `docker exec python3 /opt/mcp-servers/wechat/main.py`.
+# via `docker exec`.
+#
+# Code location: /workspace/.seaturt/mcp-servers/wechat/ (per-agent, editable).
 
 # Wait for desktop to be ready (same pattern as svc-browser-daemon-run)
 until [ -f /defaults/pid ]; do
@@ -17,9 +19,9 @@ until [ -f /defaults/pid ]; do
 done
 
 export DISPLAY=:1
+export WECHAT_SESSION_DIR="/workspace/.seaturt/mcp-servers/wechat/session"
 
 # Ensure session directory exists (persisted via workspace bind mount)
-# This is the actual directory that /opt/mcp-servers/wechat/session symlinks to.
-mkdir -p /workspace/.seaturt/wechat-session
+mkdir -p /workspace/.seaturt/mcp-servers/wechat/session
 
-exec python3 /opt/mcp-servers/wechat/wechat_launcher.py --daemon
+exec python3 /workspace/.seaturt/mcp-servers/wechat/wechat_launcher.py --daemon

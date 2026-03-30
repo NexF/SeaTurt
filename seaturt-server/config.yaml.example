@@ -57,7 +57,7 @@ default_mcp_servers:
     command: mcp-server-browser
   # WeChat MCP — disabled by default, enable when WeChat is installed in container.
   # Uses pure Python stdio (no Go proxy). Invoked as:
-  #   docker exec -i <container> python3 /opt/mcp-servers/wechat/main.py
+  #   docker exec -i <container> python3 /workspace/.seaturt/mcp-servers/wechat/main.py
   # - name: wechat
   #   command: mcp-server-wechat
 

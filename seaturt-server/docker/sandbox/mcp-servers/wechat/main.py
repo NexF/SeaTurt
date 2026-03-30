@@ -18,6 +18,7 @@ import sys
 import base64
 import logging
 import time
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Environment bootstrap (MUST run before importing wechat_ui / gi)
@@ -33,12 +34,16 @@ from wechat_launcher import (
     find_wechat_bin,
     is_wechat_running,
     launch_wechat,
+    wait_for_atspi_registration,
     WECHAT_BIN_PATHS,
 )
 
-# Bootstrap: 设置 DISPLAY + D-Bus 地址（必须在 import wechat_ui 之前）
+# Bootstrap: 设置 DISPLAY + D-Bus 地址 + AT-SPI2（必须在 import wechat_ui 之前）
+# ⚠️ 关键修复: 在 import wechat_ui 之前就确保 AT-SPI2 bus 可达，
+# 这样 Atspi.init() 连接的就是正确的 registryd 实例。
 ensure_display()
 ensure_dbus()
+ensure_atspi()
 
 from wechat_ui import WeChatUI
 
@@ -58,7 +63,7 @@ logger = logging.getLogger("mcp-wechat")
 # Constants
 # ---------------------------------------------------------------------------
 
-SESSION_DIR = "/opt/wechat-daemon/session"
+SESSION_DIR = os.environ.get("WECHAT_SESSION_DIR", "/workspace/.seaturt/mcp-servers/wechat/session")
 SCREENSHOT_PATH = os.path.join(SESSION_DIR, "screenshot.png")
 
 
@@ -409,34 +414,117 @@ def get_ui() -> WeChatUI:
     return _ui
 
 
+def _crop_qr_region(screenshot_path: str) -> Optional[str]:
+    """
+    从微信窗口截图中裁剪出 QR 码区域。
+
+    微信登录页 QR 码位置规律：
+    - QR 码位于窗口水平居中
+    - 垂直方向大致在窗口上半部偏下（约 25%~75% 区域）
+    - QR 码本身约占窗口宽度的 40%~50%
+
+    裁剪策略：取窗口中央区域（上下留 15% 边距，左右留 20% 边距）
+
+    Args:
+        screenshot_path: 原始截图路径
+
+    Returns:
+        裁剪后的图片路径，失败返回 None（使用原始截图）
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.debug("Pillow not available, skipping QR crop")
+        return None
+
+    try:
+        img = Image.open(screenshot_path)
+        w, h = img.size
+
+        # 裁剪参数：取中央区域
+        # 水平：留 20% 左右边距
+        # 垂直：留 10% 上边距，25% 下边距（QR 码偏上方）
+        margin_x = int(w * 0.20)
+        margin_top = int(h * 0.10)
+        margin_bottom = int(h * 0.25)
+
+        crop_box = (
+            margin_x,              # left
+            margin_top,            # top
+            w - margin_x,          # right
+            h - margin_bottom,     # bottom
+        )
+
+        # 确保裁剪区域合法
+        if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+            logger.warning(f"Invalid crop box: {crop_box}, image size: {w}x{h}")
+            return None
+
+        cropped = img.crop(crop_box)
+        cropped_path = screenshot_path.replace(".png", "_qr.png")
+        cropped.save(cropped_path, "PNG")
+        logger.info(f"QR 区域裁剪完成: {w}x{h} → {cropped.size[0]}x{cropped.size[1]}")
+        return cropped_path
+    except Exception as e:
+        logger.warning(f"QR 区域裁剪失败: {e}")
+        return None
+
+
 def _screenshot_qr_code(ui) -> dict:
-    """截取 QR 码页面并返回 MCP 结果。"""
+    """
+    截取微信登录 QR 码并返回 MCP 结果。
+
+    流程：
+    1. 截取微信窗口（非全屏）— 由 ui.take_screenshot() 内部通过
+       xdotool 定位窗口实现
+    2. 从窗口截图中裁剪出 QR 码区域，减少图片大小，提高清晰度
+
+    注意：不做全屏 fallback。如果无法定位微信窗口，说明 X11/AT-SPI2
+    环境有问题，后续的控件操作也无法正常工作，应尽早报错。
+    """
     os.makedirs(SESSION_DIR, exist_ok=True)
 
     # Wait a moment for the QR code to fully render
     time.sleep(2)
 
     screenshot_path = ui.take_screenshot(SCREENSHOT_PATH)
-    if screenshot_path and os.path.exists(screenshot_path):
-        with open(screenshot_path, "rb") as f:
-            img_b64 = base64.b64encode(f.read()).decode("ascii")
+    if not screenshot_path or not os.path.exists(screenshot_path):
         return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        "WeChat is waiting for QR code login.\n"
-                        "Please scan the QR code below with your phone's WeChat app.\n"
-                        "After scanning, confirm login on your phone."
-                    ),
-                },
-                {"type": "image", "data": img_b64, "mimeType": "image/png"},
-            ],
+            "content": [{
+                "type": "text",
+                "text": (
+                    "Failed to capture WeChat window screenshot.\n"
+                    "This usually means the X11/AT-SPI2 environment is not working correctly.\n"
+                    "Please check:\n"
+                    "1. Is the WeChat process running?\n"
+                    "2. Is the DISPLAY environment variable set correctly?\n"
+                    "3. Are xdotool and scrot/ImageMagick installed?\n"
+                    "4. Is the AT-SPI2 accessibility service available?\n\n"
+                    "Without a working window capture, subsequent WeChat UI operations "
+                    "will also fail."
+                ),
+            }],
+            "isError": True,
         }
 
+    # 裁剪出 QR 码区域（裁剪失败则使用完整窗口截图）
+    qr_path = _crop_qr_region(screenshot_path)
+    final_path = qr_path if qr_path and os.path.exists(qr_path) else screenshot_path
+
+    with open(final_path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode("ascii")
     return {
-        "content": [{"type": "text", "text": "WeChat is running but screenshot failed."}],
-        "isError": True,
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    "WeChat is waiting for QR code login.\n"
+                    "Please scan the QR code below with your phone's WeChat app.\n"
+                    "After scanning, confirm login on your phone."
+                ),
+            },
+            {"type": "image", "data": img_b64, "mimeType": "image/png"},
+        ],
     }
 
 
@@ -511,6 +599,10 @@ def _try_start_wechat() -> bool:
     """
     Attempt to start WeChat in the background using wechat_launcher.
     Returns True if the process was successfully launched.
+
+    增强: 启动微信后等待 AT-SPI2 注册（轮询 desktop.get_child_count()），
+    确保微信的 Qt Accessibility Bridge 完成了向 registryd 的注册，
+    后续 get_ui().find_wechat() 才能成功。
     """
     # 确保 D-Bus + AT-SPI2 环境就绪
     if not ensure_environment():
@@ -523,12 +615,23 @@ def _try_start_wechat() -> bool:
 
     # 等待微信进程就绪
     time.sleep(2)
-    if is_wechat_running():
-        logger.info("WeChat started successfully via wechat_launcher")
-        return True
+    if not is_wechat_running():
+        logger.warning("WeChat process did not appear after launch")
+        return False
 
-    logger.warning("WeChat process did not appear after launch")
-    return False
+    logger.info("WeChat process started, waiting for AT-SPI2 registration...")
+
+    # 等待微信注册到 AT-SPI2 desktop（最多 30 秒）
+    # 这解决了启动微信后 AT-SPI2 注册表为空的时序竞争问题
+    if wait_for_atspi_registration(timeout=30.0):
+        logger.info("WeChat started and registered in AT-SPI2 successfully")
+    else:
+        logger.warning(
+            "WeChat started but did not register in AT-SPI2 within timeout. "
+            "AT-SPI2 operations may not work correctly."
+        )
+
+    return True
 
 
 def tool_wechat_logout(args: dict) -> dict:
@@ -548,15 +651,19 @@ def tool_wechat_status(args: dict) -> dict:
         f"UI nodes: {status.get('node_count', 0)}",
     ]
 
-    # P2.5: DB 状态字段
+    # P2.5: DB 状态字段（多账号模式）
     try:
         from wechat_db import get_wechat_db
         db = get_wechat_db()
         db_status = db.get_key_status()
         lines.append("")
         lines.append(f"DB status: {db_status['db_status']}")
-        lines.append(f"DB count: {db_status['db_count']}/{db_status['db_total']} unlocked")
-        lines.append(f"DB extract time: {db_status['db_extract_time']}s")
+        if db_status.get('active_account'):
+            lines.append(f"Active account: {db_status['active_account']}")
+        accounts = db_status.get('accounts', [])
+        if accounts:
+            lines.append(f"Accounts: {', '.join(accounts)}")
+        lines.append(f"DB count: {db_status['db_count']}")
         if db_status.get('error'):
             lines.append(f"DB error: {db_status['error']}")
         core_dbs = db_status.get('core_dbs', {})
@@ -617,6 +724,8 @@ def tool_wechat_get_contacts(args: dict) -> dict:
 def _check_db_ready() -> dict | None:
     """检查 DB 是否就绪。
 
+    密钥提取由 daemon 在后台完成，此函数只读取缓存验证。
+
     Returns:
         None 如果就绪，否则返回 MCP 错误结果 dict。
     """
@@ -624,29 +733,23 @@ def _check_db_ready() -> dict | None:
         from wechat_db import get_wechat_db
         db = get_wechat_db()
 
-        # 首次调用时触发密钥加载
+        # 尝试从 daemon 写入的 JSON 缓存加载
         if not db.is_ready():
             db.ensure_keys()
 
         status = db.get_key_status()
         if status["db_status"] == "ready":
             return None
-        elif status["db_status"] == "extracting":
-            return {
-                "content": [{"type": "text", "text": "正在提取 DB 密钥，请稍后重试。"}],
-                "isError": True,
-            }
-        elif status["db_status"] == "failed":
-            error = status.get("error", "未知错误")
-            return {
-                "content": [{"type": "text", "text": f"DB 密钥提取失败，无法查询。错误: {error}"}],
-                "isError": True,
-            }
         else:
-            # not_started: 触发提取
-            db.ensure_keys()
+            # not_started 或 failed: daemon 可能还未完成提取
             return {
-                "content": [{"type": "text", "text": "DB 密钥提取刚启动，请稍后重试。"}],
+                "content": [{"type": "text", "text": (
+                    "⏳ 密钥提取服务正在后台工作中，请稍后重试。\n\n"
+                    "密钥提取通常需要 30~120 秒。如果长时间无法就绪，请确认：\n"
+                    "1. 微信已安装并登录\n"
+                    "2. 微信进程正在运行\n"
+                    "3. 数据库目录 ~/Documents/xwechat_files/ 存在"
+                )}],
                 "isError": True,
             }
     except Exception as e:

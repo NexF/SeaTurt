@@ -238,8 +238,8 @@ defer mockServer.Close()
 |------|---------|------|
 | IT-50 | `TestWeChatMCP_WrapperExists` | wrapper script 存在且可执行（staging + tools dir） |
 | IT-51 | `TestWeChatMCP_WrapperContent` | wrapper 内容正确（bash shebang + 绝对路径 + 环境变量） |
-| IT-52 | `TestWeChatMCP_PythonCodeInstalled` | Python 代码预装在 /opt/mcp-servers/wechat/ |
-| IT-53 | `TestWeChatMCP_SessionSymlink` | session 目录符号链接指向 workspace bind mount |
+| IT-52 | `TestWeChatMCP_PythonCodeInstalled` | Python 代码部署到 /workspace/.seaturt/mcp-servers/wechat/ |
+| IT-53 | `TestWeChatMCP_SessionDirectory` | session 目录存在于 workspace 下（无需 symlink） |
 | IT-54 | `TestWeChatMCP_Initialize` | MCP initialize 握手成功（需桌面环境，否则 SKIP） |
 | IT-55 | `TestWeChatMCP_ToolsList` | tools/list 返回全部 11 个 wechat 工具 |
 | IT-56 | `TestWeChatMCP_DiscoverAndRegister` | 完整发现流程：copy binary → discover → YAML → registry → router |

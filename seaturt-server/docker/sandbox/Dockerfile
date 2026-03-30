@@ -41,24 +41,26 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- Browser MCP daemon: install deps + Playwright Chromium ----
-COPY mcp-servers/browser/package.json mcp-servers/browser/server.js /opt/browser-daemon/
-RUN cd /opt/browser-daemon \
+# Code (server.js) is deployed to workspace at agent creation time.
+# Only npm deps and Playwright Chromium binary are installed in the image.
+COPY mcp-servers/browser/package.json /opt/browser-daemon-deps/package.json
+RUN cd /opt/browser-daemon-deps \
     && npm install --production \
     && npx playwright install chromium \
-    && npx playwright install-deps chromium \
-    && mkdir -p /opt/browser-daemon/user-data
+    && npx playwright install-deps chromium
+# Global install @playwright/mcp so npx can find it from any path
+RUN npm install -g @playwright/mcp
+# Create workspace mount-point directories (will be populated at runtime)
+RUN mkdir -p /workspace/.seaturt/mcp-servers/browser/user-data
 
-# ---- WeChat MCP server: install Python deps + copy code ----
-COPY mcp-servers/wechat/requirements.txt /opt/mcp-servers/wechat/requirements.txt
-RUN pip install --no-cache-dir --break-system-packages -r /opt/mcp-servers/wechat/requirements.txt
-COPY mcp-servers/wechat/ /opt/mcp-servers/wechat/
-RUN chmod +x /opt/mcp-servers/wechat/mcp-server-wechat
-
-# Session data (key cache, WeChat login state) is persisted via the workspace
-# bind mount: /workspace/.seaturt/wechat-session/ (survives container rebuild).
-# Create a symlink from /opt/mcp-servers/wechat/session → /workspace/.seaturt/wechat-session
-# The actual directory is created at runtime by svc-wechat-run.
-RUN ln -sf /workspace/.seaturt/wechat-session /opt/mcp-servers/wechat/session
+# ---- WeChat MCP server: install Python deps only ----
+# Code is deployed to workspace at agent creation time.
+# Only compiled deps (pysqlcipher3, zstandard) are installed in the image.
+COPY mcp-servers/wechat/requirements.txt /tmp/wechat-requirements.txt
+RUN pip install --no-cache-dir --break-system-packages -r /tmp/wechat-requirements.txt \
+    && rm -f /tmp/wechat-requirements.txt
+# Create workspace mount-point directories (will be populated at runtime)
+RUN mkdir -p /workspace/.seaturt/mcp-servers/wechat/session
 
 # ---- Register browser daemon as s6 service ----
 COPY svc-browser-daemon-run /etc/s6-overlay/s6-rc.d/svc-browser-daemon/run
@@ -79,6 +81,17 @@ RUN chmod +x /etc/s6-overlay/s6-rc.d/svc-wechat/run \
     && mkdir -p /etc/s6-overlay/s6-rc.d/svc-wechat/dependencies.d \
     && touch /etc/s6-overlay/s6-rc.d/svc-wechat/dependencies.d/svc-de \
     && touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-wechat
+
+# ---- Register wechat key extraction daemon as s6 service ----
+# Long-running daemon that polls for WeChat databases, extracts decryption
+# keys via /proc/PID/mem scanning, and writes results to JSON cache.
+# MCP tool calls (main.py) read from this cache file.
+COPY svc-wechat-keyextract-run /etc/s6-overlay/s6-rc.d/svc-wechat-keyextract/run
+RUN chmod +x /etc/s6-overlay/s6-rc.d/svc-wechat-keyextract/run \
+    && echo "longrun" > /etc/s6-overlay/s6-rc.d/svc-wechat-keyextract/type \
+    && mkdir -p /etc/s6-overlay/s6-rc.d/svc-wechat-keyextract/dependencies.d \
+    && touch /etc/s6-overlay/s6-rc.d/svc-wechat-keyextract/dependencies.d/svc-de \
+    && touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-wechat-keyextract
 
 # Ports: 3000 (HTTP Selkies), 3001 (HTTPS Selkies)
 EXPOSE 3000 3001

@@ -45,6 +45,11 @@ type Config struct {
 	// Prompts 目录（宿主机路径，存放 system prompt 模板文件）
 	// 默认为可执行文件所在目录下的 prompts/
 	PromptsDir string `yaml:"prompts_dir" json:"prompts_dir"`
+
+	// MCP Servers 源码目录（宿主机路径，存放 MCP Server Python/JS 源码）
+	// 默认为可执行文件所在目录下的 mcp-servers/
+	// 这些源码在 Agent 创建时会被复制到 workspace/.seaturt/mcp-servers/
+	MCPServersDir string `yaml:"mcp_servers_dir" json:"mcp_servers_dir"`
 }
 
 // ContainerConfig holds container-level configuration.
@@ -297,6 +302,17 @@ func (c *Config) GetPromptsDir() string {
 		return expandHome(c.PromptsDir)
 	}
 	return filepath.Join(c.ServerDir(), "prompts")
+}
+
+// GetMCPServersSourceDir returns the path to the MCP servers source directory.
+// This directory contains Python/JS source code that gets deployed to each
+// agent's workspace at creation time.
+// Default: <serverDir>/mcp-servers/
+func (c *Config) GetMCPServersSourceDir() string {
+	if c.MCPServersDir != "" {
+		return expandHome(c.MCPServersDir)
+	}
+	return filepath.Join(c.ServerDir(), "mcp-servers")
 }
 
 func getEnv(key, fallback string) string {

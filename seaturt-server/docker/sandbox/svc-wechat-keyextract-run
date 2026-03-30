@@ -1,0 +1,24 @@
+#!/usr/bin/with-contenv bash
+# s6 longrun service: WeChat key extraction daemon
+#
+# Waits for desktop environment (X11 DISPLAY=:1), then starts the
+# long-running key extraction daemon which polls for WeChat databases
+# and extracts decryption keys via /proc/PID/mem scanning.
+#
+# The daemon writes results to session/wechat_db_keys.json (atomic rename).
+# MCP tool calls (main.py via docker exec) read from this file.
+#
+# Code location: /workspace/.seaturt/mcp-servers/wechat/ (per-agent, editable).
+
+# Wait for desktop to be ready (same pattern as svc-wechat-run)
+until [ -f /defaults/pid ]; do
+  sleep .5
+done
+
+export DISPLAY=:1
+export WECHAT_SESSION_DIR="/workspace/.seaturt/mcp-servers/wechat/session"
+
+# Ensure session directory exists (persisted via workspace bind mount)
+mkdir -p /workspace/.seaturt/mcp-servers/wechat/session
+
+exec python3 /workspace/.seaturt/mcp-servers/wechat/key_extract_daemon.py

@@ -2,6 +2,9 @@
 
 # s6 service: browser MCP daemon
 # Waits for desktop environment (X11 DISPLAY=:1) then starts the Node.js daemon.
+#
+# Code location: /workspace/.seaturt/mcp-servers/browser/ (per-agent, editable).
+# npm deps (@playwright/mcp, chromium) are globally installed in the Docker image.
 
 # Wait for desktop to be ready (same pattern as svc-selkies-run)
 until [ -f /defaults/pid ]; do
@@ -9,10 +12,11 @@ until [ -f /defaults/pid ]; do
 done
 
 export DISPLAY=:1
+export BROWSER_USER_DATA_DIR="/workspace/.seaturt/mcp-servers/browser/user-data"
 
-# Ensure user data directory exists
-mkdir -p /opt/browser-daemon/user-data
+# Ensure user data directory exists (persisted via workspace bind mount)
+mkdir -p /workspace/.seaturt/mcp-servers/browser/user-data
 
 # exec replaces this shell with node — s6 manages the node process directly
 # (signal forwarding, automatic restart on crash)
-exec node /opt/browser-daemon/server.js
+exec node /workspace/.seaturt/mcp-servers/browser/server.js

@@ -13,7 +13,7 @@ import fs from "fs";
 import { spawn } from "child_process";
 
 const SOCKET_PATH = "/tmp/mcp-browser.sock";
-const USER_DATA_DIR = "/opt/browser-daemon/user-data";
+const USER_DATA_DIR = process.env.BROWSER_USER_DATA_DIR || "/workspace/.seaturt/mcp-servers/browser/user-data";
 
 // Browser state machine: "closed" | "open"
 let browserState = "closed";

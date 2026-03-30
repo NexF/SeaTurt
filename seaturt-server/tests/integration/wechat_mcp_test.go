@@ -91,20 +91,19 @@ func TestWeChatMCP_PythonCodeInstalled(t *testing.T) {
 	assert.Equal(t, 0, result4.ExitCode, "wechat_launcher.py should exist")
 }
 
-// IT-53: wechat session directory symlink points to workspace bind mount
-func TestWeChatMCP_SessionSymlink(t *testing.T) {
+// IT-53: wechat session directory exists directly in workspace (no symlink needed)
+func TestWeChatMCP_SessionDirectory(t *testing.T) {
 	t.Parallel()
 	containerID, _ := createTestContainer(t)
 
 	ctx := context.Background()
 
-	// Check symlink exists
-	checkLink := []string{"readlink", "/opt/mcp-servers/wechat/session"}
-	result, err := dockerMgr.Exec(ctx, containerID, checkLink)
+	// Check session directory exists
+	checkDir := []string{"test", "-d", "/workspace/.seaturt/mcp-servers/wechat/session"}
+	result, err := dockerMgr.Exec(ctx, containerID, checkDir)
 	require.NoError(t, err)
-	assert.Equal(t, 0, result.ExitCode)
-	assert.Contains(t, result.Stdout, "/workspace/.seaturt/wechat-session",
-		"session should be a symlink to workspace bind mount")
+	assert.Equal(t, 0, result.ExitCode,
+		"session directory should exist at /workspace/.seaturt/mcp-servers/wechat/session")
 }
 
 // IT-54: wechat MCP Server — MCP initialize handshake succeeds

@@ -13,12 +13,11 @@
 #   - Sets DISPLAY for AT-SPI2 communication with the WeChat GUI
 #   - Sets QT_ACCESSIBILITY for WeChat's Qt accessibility bridge
 #
-# NOTE: This wrapper uses an absolute path to /opt/mcp-servers/wechat/ because
-# it may be invoked from a different directory (e.g. /workspace/.seaturt/tools/)
-# after being copied there by loadMCPServers(). The Python code + deps are always
-# pre-installed in the Docker image at /opt/mcp-servers/wechat/.
+# Code location: /workspace/.seaturt/mcp-servers/wechat/ (per-agent, editable).
+# Python deps (pysqlcipher3 etc.) are pre-installed globally in the Docker image.
 
-WECHAT_MCP_DIR="/opt/mcp-servers/wechat"
+WECHAT_MCP_DIR="/workspace/.seaturt/mcp-servers/wechat"
+export WECHAT_SESSION_DIR="$WECHAT_MCP_DIR/session"
 
 # Load D-Bus session address (written by wechat_launcher.py / svc-wechat)
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && [ -f /tmp/wechat-dbus-addr ]; then

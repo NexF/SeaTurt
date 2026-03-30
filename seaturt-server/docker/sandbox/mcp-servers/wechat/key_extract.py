@@ -22,7 +22,7 @@ import logging
 from multiprocessing import Pool, cpu_count
 from collections import Counter
 
-from db_utils import load_keys, save_keys, DEFAULT_KEYS_FILE
+from db_utils import load_keys, save_keys, DEFAULT_KEYS_FILE, extract_account_id
 
 logger = logging.getLogger("wechat-key-extract")
 
@@ -153,12 +153,12 @@ def find_wechat_pid():
 
 
 def find_all_dbs():
-    """找到所有加密的微信数据库。
+    """找到所有加密的微信数据库，按 account_id 分组。
 
     扫描路径: ~/Documents/xwechat_files/<wxid>_<hash>/db_storage/
 
     Returns:
-        [(db_path, rel_path, size, salt_hex), ...]
+        {account_id: [(db_path, rel_path, size, salt_hex), ...]}
     """
     # 支持多个可能的根路径
     search_bases = [
@@ -167,7 +167,7 @@ def find_all_dbs():
         "/root/Documents/xwechat_files",
     ]
 
-    dbs = []
+    accounts = {}  # {account_id: [(db_path, rel, size, salt), ...]}
     for base in search_bases:
         if not os.path.isdir(base):
             continue
@@ -184,10 +184,11 @@ def find_all_dbs():
                         h = fh.read(16)
                     if h == b'SQLite format 3\x00':
                         continue  # 未加密的跳过
+                    acct_id = extract_account_id(full)
                     rel = full.split('db_storage/')[-1] if 'db_storage/' in full else f
-                    dbs.append((full, rel, sz, h.hex()))
+                    accounts.setdefault(acct_id, []).append((full, rel, sz, h.hex()))
 
-    return dbs
+    return accounts
 
 
 def try_key_on_db(db_path, key_hex):
@@ -245,12 +246,12 @@ def get_target_regions(pid):
 
 # ============ 主逻辑（全自动） ============
 
-def extract_keys(callback=None):
+def extract_keys(callback=None, account_filter: list[str] | None = None):
     """全自动密钥提取主函数。
 
     全流程：
       1. 查找微信 PID
-      2. 扫描所有加密数据库
+      2. 扫描所有加密数据库（按 account 分组）
       3. 用已有密钥测试哪些已解开
       4. 对未解锁的数据库自动进行内存扫描 + 验证
       5. 保存结果
@@ -261,11 +262,13 @@ def extract_keys(callback=None):
             - ("progress", {"scanned": int, "total": int}): 扫描进度
             - ("found", {"db_name": str, "key": str}): 找到密钥
             - ("error", str): 错误信息
+        account_filter: 只提取指定 account_id 列表的密钥（None = 全部）
 
     Returns:
         dict: {
             "success": bool,
-            "keys": dict,          # {db_name: {"key": ..., "compat": ..., ...}}
+            "accounts": dict,      # {account_id: {db_name: {"key": ..., "compat": ..., "db_path": ...}}}
+            "keys": dict,          # 扁平兼容: {db_name: {"key": ..., ...}} (所有账号合并)
             "unlocked": int,       # 已解锁数量
             "total": int,          # 总数据库数量
             "elapsed": float,      # 耗时（秒）
@@ -289,42 +292,68 @@ def extract_keys(callback=None):
     if not pid:
         _cb("error", "微信未运行")
         return {
-            "success": False, "keys": {}, "unlocked": 0, "total": 0,
+            "success": False, "accounts": {}, "keys": {}, "unlocked": 0, "total": 0,
             "elapsed": time.time() - t0, "error": "微信未运行",
         }
     logger.info(f"微信 PID: {pid}")
 
-    # 2. 扫描数据库
+    # 2. 扫描数据库（按 account 分组）
     _cb("status", "扫描加密数据库...")
-    all_dbs = find_all_dbs()
-    if not all_dbs:
+    account_dbs = find_all_dbs()  # {account_id: [(db_path, rel, size, salt), ...]}
+
+    # 应用 account_filter
+    if account_filter:
+        account_dbs = {k: v for k, v in account_dbs.items() if k in account_filter}
+
+    if not account_dbs:
         _cb("error", "找不到任何加密数据库")
         return {
-            "success": False, "keys": {}, "unlocked": 0, "total": 0,
+            "success": False, "accounts": {}, "keys": {}, "unlocked": 0, "total": 0,
             "elapsed": time.time() - t0, "error": "找不到任何加密数据库",
         }
-    logger.info(f"找到 {len(all_dbs)} 个加密数据库")
+
+    # 展平为列表，供后续内存扫描使用
+    all_dbs = []
+    for acct_id, dbs in account_dbs.items():
+        for db_info in dbs:
+            all_dbs.append((acct_id, *db_info))  # (acct_id, db_path, rel, sz, salt)
+
+    logger.info(f"找到 {len(account_dbs)} 个账号, {len(all_dbs)} 个加密数据库")
 
     # 3. 用已有密钥测试
     _cb("status", f"测试已有密钥 ({len(all_dbs)} 个数据库)...")
     known_keys = load_keys()
-    all_known_values = list(set(v["key"] for v in known_keys.values() if "key" in v))
+    # 从多账号或扁平缓存中收集已知密钥值
+    all_known_values = set()
+    for k, v in known_keys.items():
+        if k == "_meta":
+            continue
+        if isinstance(v, dict) and "key" in v:
+            all_known_values.add(v["key"])
+        elif isinstance(v, dict):
+            # 多账号格式: v = {db_name: {key: ...}}
+            for db_info in v.values():
+                if isinstance(db_info, dict) and "key" in db_info:
+                    all_known_values.add(db_info["key"])
+    all_known_values = list(all_known_values)
 
     db_status = []
-    for i, (db_path, rel, sz, salt) in enumerate(all_dbs):
+    for acct_id, db_path, rel, sz, salt in all_dbs:
         db_name = os.path.basename(db_path)
         status = "locked"
         found_key = None
         found_compat = 0
 
-        # 先用对应 db_name 的已知密钥
-        if db_name in known_keys and "key" in known_keys[db_name]:
-            k = known_keys[db_name]["key"]
-            c = try_key_on_db(db_path, k)
-            if c:
-                status = "unlocked"
-                found_key = k
-                found_compat = c
+        # 先用对应 account + db_name 的已知密钥
+        acct_cache = known_keys.get(acct_id, {})
+        if isinstance(acct_cache, dict) and db_name in acct_cache:
+            cached_info = acct_cache[db_name]
+            if isinstance(cached_info, dict) and "key" in cached_info:
+                c = try_key_on_db(db_path, cached_info["key"])
+                if c:
+                    status = "unlocked"
+                    found_key = cached_info["key"]
+                    found_compat = c
 
         # 再用所有已知密钥交叉验证
         if status == "locked":
@@ -336,49 +365,60 @@ def extract_keys(callback=None):
                     found_compat = c
                     break
 
-        db_status.append((i, db_path, rel, sz, salt, status, found_key, found_compat))
+        db_status.append((acct_id, db_path, rel, sz, salt, status, found_key, found_compat))
 
     locked_list = []
     unlocked_list = []
-    for i, db_path, rel, sz, salt, status, key, compat in db_status:
+    for acct_id, db_path, rel, sz, salt, status, key, compat in db_status:
         if status == "unlocked":
-            unlocked_list.append((i, db_path, rel, sz, key, compat))
+            unlocked_list.append((acct_id, db_path, rel, sz, key, compat))
         else:
-            locked_list.append((i, db_path, rel, sz, salt))
+            locked_list.append((acct_id, db_path, rel, sz, salt))
 
     logger.info(f"数据库状态: {len(unlocked_list)} 已解锁, {len(locked_list)} 未解锁")
+
+    # 构建多账号结果
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    accounts_result = {}  # {account_id: {db_name: info}}
+
+    # 已解锁的先放入结果
+    for acct_id, db_path, rel, sz, key, compat in unlocked_list:
+        db_name = os.path.basename(db_path)
+        accounts_result.setdefault(acct_id, {})[db_name] = {
+            "key": key,
+            "compat": compat,
+            "db_path": db_path,
+            "found_time": now_str,
+        }
 
     # 如果全部已解锁，直接返回
     if not locked_list:
         _cb("status", "所有数据库都已解锁!")
-        # 确保已知密钥都持久化
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for i, db_path, rel, sz, key, compat in unlocked_list:
-            db_name = os.path.basename(db_path)
-            if db_name not in known_keys:
-                known_keys[db_name] = {
-                    "key": key,
-                    "compat": compat,
-                    "db_path": db_path,
-                    "found_time": now_str,
-                }
-        save_keys(known_keys)
+        # 构建扁平兼容 keys
+        flat_keys = {}
+        for acct_id, keys in accounts_result.items():
+            flat_keys.update(keys)
+        save_keys(known_keys)  # 保留原有缓存
         return {
-            "success": True, "keys": known_keys,
+            "success": True, "accounts": accounts_result, "keys": flat_keys,
             "unlocked": len(all_dbs), "total": len(all_dbs),
             "elapsed": time.time() - t0, "error": None,
         }
 
     # 4. 内存扫描 + 验证
-    search_targets = [db_path for i, db_path, rel, sz, salt in locked_list]
+    search_targets = [db_path for acct_id, db_path, rel, sz, salt in locked_list]
     logger.info(f"将为 {len(search_targets)} 个数据库搜索密钥")
 
     _cb("status", "编译 C 扫描器...")
     lib = compile_scanner()
     if not lib:
         _cb("error", "C 编译失败")
+        flat_keys = {}
+        for acct_id, keys in accounts_result.items():
+            flat_keys.update(keys)
         return {
-            "success": False, "keys": known_keys,
+            "success": len(unlocked_list) > 0,
+            "accounts": accounts_result, "keys": flat_keys,
             "unlocked": len(unlocked_list), "total": len(all_dbs),
             "elapsed": time.time() - t0, "error": "C 扫描器编译失败（需要 gcc）",
         }
@@ -400,9 +440,11 @@ def extract_keys(callback=None):
     found_keys = {}
     BATCH_SZ = 300
 
+    # 建立 db_name → (acct_id, db_path) 映射
     remaining_dbs = {}
-    for db_path in search_targets:
-        remaining_dbs[os.path.basename(db_path)] = db_path
+    for acct_id, db_path, rel, sz, salt in locked_list:
+        db_name = os.path.basename(db_path)
+        remaining_dbs[db_name] = (acct_id, db_path)
 
     pool = Pool(processes=workers, initializer=_init_worker, initargs=(search_targets,))
 
@@ -455,10 +497,10 @@ def extract_keys(callback=None):
                         for db_name, compat in db_results.items():
                             if db_name in remaining_dbs:
                                 addr = batch_info[j][1]
-                                db_path = remaining_dbs.pop(db_name)
-                                found_keys[db_name] = (kh, addr, rname, compat, db_path)
+                                acct_id, db_path = remaining_dbs.pop(db_name)
+                                found_keys[db_name] = (kh, addr, rname, compat, db_path, acct_id)
                                 logger.info(f"★ 找到 {db_name} 的密钥! "
-                                            f"key={kh[:8]}...{kh[-8:]} compat={compat}")
+                                            f"key={kh[:8]}...{kh[-8:]} compat={compat} account={acct_id}")
                                 _cb("found", {"db_name": db_name, "key": kh})
 
                     if not remaining_dbs:
@@ -474,10 +516,10 @@ def extract_keys(callback=None):
                     for db_name, compat in db_results.items():
                         if db_name in remaining_dbs:
                             addr = batch_info[j][1]
-                            db_path = remaining_dbs.pop(db_name)
-                            found_keys[db_name] = (kh, addr, rname, compat, db_path)
+                            acct_id, db_path = remaining_dbs.pop(db_name)
+                            found_keys[db_name] = (kh, addr, rname, compat, db_path, acct_id)
                             logger.info(f"★ 找到 {db_name} 的密钥! "
-                                        f"key={kh[:8]}...{kh[-8:]} compat={compat}")
+                                        f"key={kh[:8]}...{kh[-8:]} compat={compat} account={acct_id}")
                             _cb("found", {"db_name": db_name, "key": kh})
 
     except Exception as e:
@@ -488,12 +530,10 @@ def extract_keys(callback=None):
 
     elapsed = time.time() - t0
 
-    # 5. 保存结果
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
+    # 5. 将新找到的密钥加入多账号结果
     if found_keys:
-        for db_name, (key_hex, addr, rname, compat, db_path) in found_keys.items():
-            known_keys[db_name] = {
+        for db_name, (key_hex, addr, rname, compat, db_path, acct_id) in found_keys.items():
+            accounts_result.setdefault(acct_id, {})[db_name] = {
                 "key": key_hex,
                 "compat": compat,
                 "db_path": db_path,
@@ -502,18 +542,10 @@ def extract_keys(callback=None):
                 "found_time": now_str,
             }
 
-    # 保存已解锁的密钥
-    for i, db_path, rel, sz, key, compat in unlocked_list:
-        db_name = os.path.basename(db_path)
-        if db_name not in known_keys:
-            known_keys[db_name] = {
-                "key": key,
-                "compat": compat,
-                "db_path": db_path,
-                "found_time": now_str,
-            }
-
-    save_keys(known_keys)
+    # 构建扁平兼容 keys
+    flat_keys = {}
+    for acct_id, keys in accounts_result.items():
+        flat_keys.update(keys)
 
     total_unlocked = len(unlocked_list) + len(found_keys)
     success = total_unlocked > 0
@@ -528,7 +560,8 @@ def extract_keys(callback=None):
 
     return {
         "success": success,
-        "keys": known_keys,
+        "accounts": accounts_result,
+        "keys": flat_keys,
         "unlocked": total_unlocked,
         "total": len(all_dbs),
         "elapsed": elapsed,

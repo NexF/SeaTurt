@@ -4,7 +4,9 @@
 功能:
   - open_db / try_open_db: 打开 SQLCipher 加密数据库
   - list_tables: 列出数据库所有表
-  - load_keys / save_keys: 读写密钥 JSON 文件
+  - load_keys / save_keys: 读写密钥 JSON 文件（原子写）
+  - extract_account_id: 从 db_path 提取 account_id
+  - detect_active_account: 根据 mtime 检测活跃账号
 
 路径:
   - 密钥缓存: session/wechat_db_keys.json（运行时目录）
@@ -17,7 +19,7 @@ import logging
 logger = logging.getLogger("wechat-db")
 
 # 密钥文件路径: 与 main.py 的 SESSION_DIR 一致
-SESSION_DIR = os.environ.get("WECHAT_SESSION_DIR", "/opt/wechat-daemon/session")
+SESSION_DIR = os.environ.get("WECHAT_SESSION_DIR", "/workspace/.seaturt/mcp-servers/wechat/session")
 DEFAULT_KEYS_FILE = os.path.join(SESSION_DIR, "wechat_db_keys.json")
 
 
@@ -79,9 +81,54 @@ def load_keys(keys_file=None):
 
 
 def save_keys(keys_dict, keys_file=None):
-    """保存密钥到 JSON 文件"""
+    """原子保存密钥到 JSON 文件（写临时文件 + os.rename）"""
     path = keys_file or DEFAULT_KEYS_FILE
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
+    tmp_path = path + ".tmp"
+    with open(tmp_path, 'w') as f:
         json.dump(keys_dict, f, indent=2, ensure_ascii=False)
+    os.rename(tmp_path, path)  # POSIX 原子操作
     logger.info(f"密钥已保存: {path} ({len(keys_dict)} 个)")
+
+
+# ---------------------------------------------------------------------------
+# 多账号辅助函数
+# ---------------------------------------------------------------------------
+
+
+def extract_account_id(db_path: str) -> str:
+    """从 db_path 中提取 account_id (xwechat_files 下的目录名)
+
+    例：/home/ubuntu/Documents/xwechat_files/wxid_abc_hash1/db_storage/message_0.db
+    → 返回 "wxid_abc_hash1"
+    """
+    parts = db_path.split("/")
+    for i, part in enumerate(parts):
+        if part == "xwechat_files" and i + 1 < len(parts):
+            return parts[i + 1]
+    # fallback: db_storage 的上一级目录名
+    for i, part in enumerate(parts):
+        if part == "db_storage" and i > 0:
+            return parts[i - 1]
+    return "unknown"
+
+
+def detect_active_account(account_dbs: dict) -> str | None:
+    """根据 DB 文件 mtime 检测当前活跃账号
+
+    Args:
+        account_dbs: {account_id: [(db_path, rel, size, salt), ...]}
+    Returns:
+        最近修改的账号 ID，无数据时返回 None
+    """
+    latest = (None, 0)
+    for acct_id, dbs in account_dbs.items():
+        for db_info in dbs:
+            db_path = db_info[0]  # 元组的第一个元素是 db_path
+            try:
+                mt = os.path.getmtime(db_path)
+                if mt > latest[1]:
+                    latest = (acct_id, mt)
+            except OSError:
+                pass
+    return latest[0]

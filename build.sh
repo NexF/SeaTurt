@@ -147,16 +147,36 @@ build_server() {
     mkdir -p "$DOCKER_DST"
     cp "$DOCKER_SRC/Dockerfile" "$DOCKER_DST/Dockerfile"
     # s6 service scripts
-    for svc in svc-selkies-run svc-browser-daemon-run svc-wechat-run; do
+    for svc in svc-selkies-run svc-browser-daemon-run svc-wechat-run svc-wechat-keyextract-run; do
         if [[ -f "$DOCKER_SRC/$svc" ]]; then
             cp "$DOCKER_SRC/$svc" "$DOCKER_DST/$svc"
         fi
     done
     # mcp-servers directories (browser daemon + wechat code/deps)
+    # These are used by Dockerfile for building the image AND
+    # by manager.go for deploying code to each agent's workspace.
     if [[ -d "$DOCKER_SRC/mcp-servers" ]]; then
         cp -r "$DOCKER_SRC/mcp-servers" "$DOCKER_DST/mcp-servers"
     fi
     echo "    Docker files copied → $DOCKER_DST/"
+
+    # Copy MCP server source code to release dir for agent workspace deployment.
+    # manager.go's deployMCPServers() copies from <serverDir>/mcp-servers/ to workspace.
+    local MCP_SERVERS_DST="$BUILD_DIR/mcp-servers"
+    mkdir -p "$MCP_SERVERS_DST/wechat" "$MCP_SERVERS_DST/browser"
+    # WeChat: Python code + wrapper (exclude test files, __pycache__, build artifacts)
+    for f in main.py wechat_ui.py wechat_db.py wechat_db_query.py wechat_launcher.py \
+             db_utils.py key_extract.py key_extract_daemon.py mcp-server-wechat requirements.txt; do
+        if [[ -f "$DOCKER_SRC/mcp-servers/wechat/$f" ]]; then
+            cp "$DOCKER_SRC/mcp-servers/wechat/$f" "$MCP_SERVERS_DST/wechat/$f"
+        fi
+    done
+    chmod +x "$MCP_SERVERS_DST/wechat/mcp-server-wechat" 2>/dev/null || true
+    # Browser: only server.js
+    if [[ -f "$DOCKER_SRC/mcp-servers/browser/server.js" ]]; then
+        cp "$DOCKER_SRC/mcp-servers/browser/server.js" "$MCP_SERVERS_DST/browser/server.js"
+    fi
+    echo "    MCP server sources copied → $MCP_SERVERS_DST/"
 
     # Copy prompts directory
     local PROMPTS_SRC="$SERVER_DIR/prompts"
